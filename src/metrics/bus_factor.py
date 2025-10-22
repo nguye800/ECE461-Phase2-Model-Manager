@@ -54,7 +54,7 @@ repository(name:"%s", owner:"%s"){
             return (0, {})
         try:
             obj = json.loads(self.response.text)
-        except TypeError:
+        except Exception:
             raise ValueError("Repository is not public or does not exist")
         
         # GraphQL errors (common for invalid/private repos)
@@ -68,7 +68,7 @@ repository(name:"%s", owner:"%s"){
             raise ValueError("Repository is not public or does not exist")
 
         repo = data.get("repository")
-        if not repo:
+        if repo is None:
             raise ValueError("Repository is not public or does not exist")
 
         refs = repo.get("refs") or {}
