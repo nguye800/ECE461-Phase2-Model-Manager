@@ -12,6 +12,23 @@ packages = [
     {include = "license.py", from = "src/metrics"}
 ]
 
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+typer = "^0.20.0"
+pydantic = "^2.12.3"
+sortedcontainers = "^2.4.0"
+poetry = "^2.2.1"
+coverage = {extras = ["toml"], version = "^7.11.0"}
+pylint = "^4.0.2"
+toml = "^0.10.2"
+spdx-license-matcher = "^1.0.10"
+dotenv = "^0.9.9"
+torch = "^2.9.0"
+transformers = "^4.57.1"
+accelerate = "^1.11.0"
+huggingface-hub = "^0.35.3"
+gitpython = "^3.1.45"
+
 
 [build-system]
 requires = ["poetry-core"]
