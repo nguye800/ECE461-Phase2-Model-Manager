@@ -6,6 +6,7 @@ coverage
 pylint
 toml
 spdx-license-matcher
+spdx-matcher
 dotenv
 torch
 transformers

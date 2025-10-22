@@ -55,7 +55,7 @@ repository(name:"%s", owner:"%s"){
         response_obj = json.loads(self.response.text)
         try:
             response_obj["data"]["repository"]["refs"]["edges"]
-        except TypeError:
+        except (TypeError, KeyError):
             raise ValueError("Repository is not public or does not exist")
         commit_score: dict[str, int] = {}
         total_commits = 0

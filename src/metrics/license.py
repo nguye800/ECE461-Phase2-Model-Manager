@@ -1,7 +1,7 @@
 from metric import BaseMetric  # pyright: ignore[reportMissingTypeStubs]
 from pathlib import Path
 import re
-from spdx_matcher.find import find_license  # type: ignore
+import spdx_matcher
 
 metadata_pattern = re.compile(r"^license: (.*)$")
 heading_pattern = re.compile(r"^#+ *(.*)$")
@@ -147,10 +147,12 @@ class LicenseMetric(BaseMetric):
             if len(matches) > 0:
                 readme_score = self.parse_license_file()
             else:
-                matches: list[dict[str, str]] = find_license(license_section)  # type: ignore
-                if matches:
-                    spdx_id = matches[0]["spdx_id"]
-                    readme_score = license_score.get(spdx_id.lower(), 0.0)
+                licenses_detected, percent = spdx_matcher.analyse_license_text(license_text)
+
+                spdx_ids = list(licenses_detected["license"].keys())
+                if spdx_ids: 
+                    spdx_id = spdx_ids[0].lower()
+                    readme_score = license_score.get(spdx_id, 0.0)
 
         if readme_score is not None:
             return readme_score
@@ -166,12 +168,19 @@ class LicenseMetric(BaseMetric):
         # SPDX matcher returns a list of possible SPDX IDs
         if not heuristics_check(license_text):
             return 0.0
-        matches: list[dict[str, str]] = find_license(license_text)  # type: ignore
-        if matches:
-            spdx_id = matches[0]["spdx_id"]
-            score = license_score.get(spdx_id.lower(), 0.0)
-            return score
-        return 0.0  # pragma: no cover
+        
+        licenses_detected, percent = spdx_matcher.analyse_license_text(license_text)
+
+        if not licenses_detected.get("license"):
+            return 0.0
+        
+        spdx_ids = list(licenses_detected["license"].keys())
+        if not spdx_ids:
+            return 0.0
+        
+        spdx_id = spdx_ids[0].lower()
+        score = license_score.get(spdx_id, 0.0)
+        return score
 
     def calculate_score(self) -> float:
         if self.local_directory is None or self.local_directory.model is None:
