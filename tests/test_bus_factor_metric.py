@@ -70,7 +70,7 @@ class TestBustFactor(unittest.TestCase):
         }
         total_commits = 30
         self.metric_instance.setup_resources()
-        self.metric_instance.get_response()
+        self.metric_instance.get_response(urls.codebase)
         parsed_response = self.metric_instance.parse_response()
         self.assertDictEqual(parsed_response[1], commit_score)
         self.assertEqual(parsed_response[0], total_commits)
@@ -82,7 +82,7 @@ class TestBustFactor(unittest.TestCase):
         self.metric_instance.set_url(urls)
         total_commits = 25
         self.metric_instance.setup_resources()
-        self.metric_instance.get_response()
+        self.metric_instance.get_response(urls.codebase)
         parsed_response = self.metric_instance.parse_response()
         self.assertGreaterEqual(total_commits, parsed_response[0])
         self.assertGreaterEqual(
@@ -111,6 +111,7 @@ class TestBustFactor(unittest.TestCase):
         urls.codebase = "github.com/silica-dev/TerrorCTF"
         self.metric_instance.set_url(urls)
         self.metric_instance.setup_resources()
+        self.metric_instance.get_response(urls.codebase)
         self.assertIsNotNone(self.metric_instance.response)
         if self.metric_instance.response is None:
             return
@@ -121,6 +122,7 @@ class TestBustFactor(unittest.TestCase):
         urls.codebase = "https://github.com/leftwm/leftwm/tree/flake_update"
         self.metric_instance.set_url(urls)
         self.metric_instance.setup_resources()
+        self.metric_instance.get_response(urls.codebase)
         self.assertIsNotNone(self.metric_instance.response)
         if self.metric_instance.response is None:
             return
