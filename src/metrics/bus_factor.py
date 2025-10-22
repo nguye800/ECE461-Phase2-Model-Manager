@@ -54,7 +54,7 @@ repository(name:"%s", owner:"%s"){
         Raises:
             ValueError if the URL is invalid or if no GitHub token is found.
         """
-        load_dotenv()  # ensure .env variables are loaded
+        load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../../.env"))  # ensure .env variables are loaded
 
         # Validate and extract owner/repo from URL
         matches = github_pattern.match(url.strip())
