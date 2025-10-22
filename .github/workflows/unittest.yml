@@ -1,0 +1,27 @@
+name: Python Unittest Coverage
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+
+    - name: Install Poetry
+      run: pip install poetry
+
+    - name: Install Poetry Dependencies
+      run: poetry install
+        
+    - name: Run tests with coverage
+      run: poetry run coverage run -m unittest discover -s tests
+
+    - name: Display coverage report
+      run: poetry run coverage report -m
