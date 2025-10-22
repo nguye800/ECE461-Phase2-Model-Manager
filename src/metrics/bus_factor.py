@@ -44,7 +44,7 @@ repository(name:"%s", owner:"%s"){
         self.response = None
         super().__init__()
 
-    github_pattern = re.compile(r"^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)\/?.*$")
+    github_pattern = re.compile(r"(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)(?:\/.*)?$")
 
     def get_response(self, url: str):
         """
