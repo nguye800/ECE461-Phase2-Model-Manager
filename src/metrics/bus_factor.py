@@ -7,8 +7,7 @@ from huggingface_hub import list_repo_commits
 from config import extract_model_repo_id
 from datetime import datetime
 
-github_pattern = re.compile(r"^(.*)?github.com\/([^\/]+)\/([^\/]+)\/?(.*)$")
-
+github_pattern = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git|/)?$")
 
 # Bus factor metric
 # Assumes that the url for this metric points to a github codebase
@@ -43,8 +42,6 @@ repository(name:"%s", owner:"%s"){
     def __init__(self):
         self.response = None
         super().__init__()
-
-    github_pattern = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git|/)?$")
 
     def get_response(self, url: str):
         """
