@@ -1,7 +1,7 @@
 import unittest
-from metrics.dataset_and_code import *
+from src.metrics.dataset_and_code import *
 from unittest.mock import MagicMock
-from metric import ModelURLs
+from src.metric import ModelURLs
 
 
 class MockPath:

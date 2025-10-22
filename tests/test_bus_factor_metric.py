@@ -1,6 +1,6 @@
 import unittest
-from metrics.bus_factor import *  # pyright: ignore[reportWildcardImportFromLibrary]
-from metric import ModelURLs
+from src.metrics.bus_factor import *  # pyright: ignore[reportWildcardImportFromLibrary]
+from src.metric import ModelURLs
 
 
 class TestBustFactor(unittest.TestCase):

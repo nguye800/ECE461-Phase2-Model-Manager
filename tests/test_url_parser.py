@@ -1,8 +1,8 @@
 import unittest
 import tempfile
 from pathlib import Path
-from config import ModelURLs
-from url_parser import read_url_csv
+from src.config import ModelURLs
+from src.url_parser import read_url_csv
 
 
 class TestURLParser(unittest.TestCase):

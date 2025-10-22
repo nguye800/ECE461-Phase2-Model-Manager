@@ -1,6 +1,6 @@
 import unittest
-from metrics.dataset_quality import *
-from metric import ModelURLs
+from src.metrics.dataset_quality import *
+from src.metric import ModelURLs
 
 
 class TestDatasetQuality(unittest.TestCase):

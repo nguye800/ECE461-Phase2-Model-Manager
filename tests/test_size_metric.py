@@ -2,9 +2,9 @@ import unittest
 from pathlib import Path
 import types
 
-from metrics.size_metric import SizeMetric, DEVICE_SPECS
-from metric import BaseMetric
-from config import ModelURLs, ModelPaths  # adjust if these live elsewhere
+from src.metrics.size_metric import SizeMetric, DEVICE_SPECS
+from src.metric import BaseMetric
+from src.config import ModelURLs, ModelPaths  # adjust if these live elsewhere
 
 
 class TestSizeMetric(unittest.TestCase):

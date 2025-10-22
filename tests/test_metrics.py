@@ -1,8 +1,8 @@
 import unittest
 import tempfile
-from workflow import *  # pyright: ignore[reportWildcardImportFromLibrary, reportMissingTypeStubs]
-from metric import *  # pyright: ignore[reportWildcardImportFromLibrary, reportMissingTypeStubs]
-from config import *
+from src.workflow import *  # pyright: ignore[reportWildcardImportFromLibrary, reportMissingTypeStubs]
+from src.metric import *  # pyright: ignore[reportWildcardImportFromLibrary, reportMissingTypeStubs]
+from src.config import *
 
 
 class DummyMetric1(BaseMetric):

@@ -3,7 +3,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from config import (
+from src.config import (
     PFExponentialDecay,
     PFReciprocal,
     PRIORITY_FUNCTIONS,

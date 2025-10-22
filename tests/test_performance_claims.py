@@ -4,8 +4,8 @@ import tempfile
 import json
 import types
 
-from metrics.performance_claims import PerformanceClaimsMetric
-from config import ModelPaths
+from src.metrics.performance_claims import PerformanceClaimsMetric
+from src.config import ModelPaths
 
 class _StubResponse:
     def __init__(self, payload):

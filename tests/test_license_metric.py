@@ -1,8 +1,8 @@
 import unittest
-from metrics.license import *  # pyright: ignore[reportWildcardImportFromLibrary]
+from src.metrics.license import *  # pyright: ignore[reportWildcardImportFromLibrary]
 from pathlib import Path
 import os, shutil
-from metric import ModelPaths
+from src.metric import ModelPaths
 
 
 class LicenseMetricTest(unittest.TestCase):

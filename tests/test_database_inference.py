@@ -1,7 +1,7 @@
-from infer_dataset import *
+from ..src.infer_dataset import *
 from unittest import TestCase
-from database import SQLiteAccessor
-from database import ModelStats
+from src.database import SQLiteAccessor
+from src.database import ModelStats
 
 
 class MockPath:
