@@ -44,6 +44,47 @@ repository(name:"%s", owner:"%s"){
         self.response = None
         super().__init__()
 
+    github_pattern = re.compile(r"^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)\/?.*$")
+
+    def get_response(self, url: str):
+        """
+        Queries the GitHub GraphQL API for commit data using the repository URL.
+
+        Returns:
+            requests.Response object containing the GraphQL JSON payload.
+        Raises:
+            ValueError if the URL is invalid or if no GitHub token is found.
+        """
+        load_dotenv()  # ensure .env variables are loaded
+
+        # Validate and extract owner/repo from URL
+        matches = github_pattern.match(url)
+        if matches is None:
+            raise ValueError(f"Invalid GitHub URL: {url}")
+
+        owner, name = matches.groups()
+        if not owner or not name:
+            raise ValueError(f"Invalid GitHub URL: {url}")
+
+        token = os.getenv("GITHUB_TOKEN")
+        if not token:
+            raise ValueError("Missing GitHub API token in environment (GITHUB_TOKEN)")
+
+        # Construct GraphQL query payload
+        graphql_url = "https://api.github.com/graphql"
+        query = self.graphql_query % (name, owner)
+        payload = {"query": query}
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # Perform the request
+        try:
+            response = requests.post(graphql_url, json=payload, headers=headers, timeout=10)
+            response.raise_for_status()  # HTTP-level errors
+        except requests.exceptions.RequestException as e:
+            raise ValueError(f"GitHub API request failed: {e}")
+
+        self.response = response
+
     # separated into functions for testing
 
     # parse the given response

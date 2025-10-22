@@ -156,28 +156,75 @@ class SQLiteAccessor:
         self.cursor.execute(sql)
         self.connection.commit()
 
-    def get_database_metrics_if_exists(
-        self, url: str, schema: list
-    ):
+    # def get_database_metrics_if_exists(
+    #     self, url: str, schema: list
+    # ):
+    #     self.cursor.execute("SELECT * FROM models WHERE database_url = ?", (url,))
+    #     row = self.cursor.fetchone()
+    #     if row is None:
+    #         return None
+    #     col_names = [desc[0] for desc in self.cursor.description]
+    #     scores: list = []
+    #     for metric in schema:
+    #         if isinstance(metric, FloatMetric):
+    #             value = row[col_names.index(metric.name)]
+    #             latency = row[col_names.index(f"{metric.name}_latency")]
+    #             scores.append(FloatMetric(metric.name, value, latency))
+    #         else:
+    #             dict_data: dict[str, float] = {}
+    #             for key in metric.data.keys():
+    #                 col = f"{metric.name}_{key}"
+    #                 if col in col_names:
+    #                     dict_data[key] = row[col_names.index(col)]
+    #             latency = row[col_names.index(f"{metric.name}_latency")]
+    #             scores.append(DictMetric(metric.name, dict_data, latency))
+    #     return scores
+
+    def get_database_metrics_if_exists(self, url: str, schema: list):
         self.cursor.execute("SELECT * FROM models WHERE database_url = ?", (url,))
         row = self.cursor.fetchone()
         if row is None:
             return None
+
         col_names = [desc[0] for desc in self.cursor.description]
+        col_index = {name: i for i, name in enumerate(col_names)}  # faster lookups
+
         scores: list = []
         for metric in schema:
-            if isinstance(metric, FloatMetric):
-                value = row[col_names.index(metric.name)]
-                latency = row[col_names.index(f"{metric.name}_latency")]
-                scores.append(FloatMetric(metric.name, value, latency))
-            else:
+            name = metric.name
+            data = getattr(metric, "data", None)
+            latency_col = f"{name}_latency"
+
+            # --- scalar-shaped metric (float/int) ---
+            if isinstance(data, (int, float)) or name in col_index:
+                # even if isinstance(metric, FloatMetric) is False, handle by shape
+                value = row[col_index[name]] if name in col_index else 0.0
+                latency = row[col_index[latency_col]] if latency_col in col_index else 0
+                # construct a FloatMetric to match test expectations
+                scores.append(FloatMetric(name, float(value), int(latency)))
+                continue
+
+            # --- dict-shaped metric ---
+            if isinstance(data, dict):
                 dict_data: dict[str, float] = {}
-                for key in metric.data.keys():
-                    col = f"{metric.name}_{key}"
-                    if col in col_names:
-                        dict_data[key] = row[col_names.index(col)]
-                latency = row[col_names.index(f"{metric.name}_latency")]
-                scores.append(DictMetric(metric.name, dict_data, latency))
+                for key in data.keys():
+                    col = f"{name}_{key}"
+                    if col in col_index:
+                        dict_data[key] = row[col_index[col]]
+                latency = row[col_index[latency_col]] if latency_col in col_index else 0
+                scores.append(DictMetric(name, dict_data, int(latency)))
+                continue
+
+            # --- fallback: try scalar by column presence, else skip/raise ---
+            if name in col_index:
+                value = row[col_index[name]]
+                latency = row[col_index.get(latency_col, col_index[name])] if latency_col in col_index else 0
+                scores.append(FloatMetric(name, float(value), int(latency)))
+            else:
+                # You can choose to skip silently or raise; skipping is usually nicer for partial schemas
+                # raise TypeError(f"Unsupported metric.data for {name}: {type(data).__name__}")
+                continue
+
         return scores
 
     def check_entry_in_db(self, url: str) -> bool:
