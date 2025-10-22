@@ -7,7 +7,9 @@ from huggingface_hub import list_repo_commits
 from config import extract_model_repo_id
 from datetime import datetime
 
-github_pattern = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git|/)?$")
+github_pattern = re.compile(
+    r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)(?:/(?:tree|blob)/[^/]+)?/?$"
+)
 
 # Bus factor metric
 # Assumes that the url for this metric points to a github codebase
@@ -203,8 +205,8 @@ repository(name:"%s", owner:"%s"){
             if matches is None:
                 raise ValueError("invalid GitHub URL")
 
-            owner = matches.group(2)
-            name = matches.group(3)
+            owner = matches.group(1)
+            name = matches.group(2)
 
             # this should theoretically never run but will cause errors to be
             # raised if the regex parsing is faulty
