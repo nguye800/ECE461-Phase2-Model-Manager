@@ -14,7 +14,7 @@ def create_dummy_sqlite_db(db_path=None):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute("""this
         CREATE TABLE IF NOT EXISTS model_registry (
             model_id INTEGER PRIMARY KEY AUTOINCREMENT,
             repo_id TEXT,
@@ -37,7 +37,32 @@ def create_dummy_sqlite_db(db_path=None):
     """)
 
     conn.commit()
-    return conn
+
+    # add dummy data for 3 models
+    models = [
+        ("Qwen2.5-1.5B-Instruct", "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct", "Tongyi Qianwen Research License", "https://github.com/QwenLM/Qwen2", "QwenBase", "https://datasets.alibaba.com/qwen", 1.5e9, 3.4),
+        ("Llama-3-8B", "https://huggingface.co/meta-llama/Llama-3-8B", "Meta Llama License", "https://github.com/meta-llama/llama3", "Llama-2", "https://datasets.meta.com/llama", 8e9, 16),
+        ("Mistral-7B-v0.2", "https://huggingface.co/mistralai/Mistral-7B-v0.2", "Apache 2.0", "https://github.com/mistralai/mistral", "MistralBase", "https://huggingface.co/datasets/TinyStories", 7e9, 13.2),
+    ]
+
+    # Insert sample records with fake CloudWatch/S3 paths
+    for name, url, lic, git, base, dataset, params, size in models:
+        cursor.execute("""
+        INSERT INTO model_registry (
+            repo_id, model_url, date_time_entered_to_db, likes, downloads, license,
+            github_link, github_numContributors, base_models_modelID, base_model_urls,
+            parameter_number, gb_size_of_model, dataset_link, dataset_name,
+            s3_location_of_model_zip, s3_location_of_cloudwatch_log_for_database_entry
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            name, url, datetime.datetime.now().isoformat(), 1000, 1000000, lic,
+            git, 20, base, f"https://huggingface.co/{base}", params, size,
+            dataset, f"{name}-dataset",
+            f"s3://dummy-model-bucket/{name}.zip",
+            f"s3://dummy-model-bucket/{name}_cloudwatch_log.json"
+        ))
+
+    conn.commit()
 
 
 def teardown_dummy_sqlite_db(conn, db_path=None):
@@ -46,7 +71,7 @@ def teardown_dummy_sqlite_db(conn, db_path=None):
     if db_path and os.path.exists(db_path):
         os.remove(db_path)
 
-
+# Moto automatically wipes state after exiting the @mock_s3 scope.
 @mock_s3
 def create_dummy_s3_environment():
     """Create a dummy S3 environment with fake files using Moto."""
@@ -67,12 +92,6 @@ def create_dummy_s3_environment():
     )
 
     return s3
-
-
-def teardown_dummy_s3_environment(s3_client):
-    """Teardown the Moto fake S3 environment."""
-    # Moto automatically wipes state after exiting the @mock_s3 scope.
-    pass
 
 
 # Example usage
