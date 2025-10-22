@@ -1,0 +1,278 @@
+2025-09-28 19:25:02,329 - root - DEBUG - Test discovery starting from: C:\Users\12605\HuggingFace-Model-Manager\tests
+2025-09-28 19:25:02,330 - root - DEBUG - Tests discovered: 130
+2025-09-28 19:25:02,355 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:25:03,327 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/models/google-bert/bert-base-uncased/commits/main HTTP/1.1" 200 9265
+2025-09-28 19:25:03,349 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api.github.com:443
+2025-09-28 19:25:04,316 - urllib3.connectionpool - DEBUG - https://api.github.com:443 "POST /graphql HTTP/1.1" 401 98
+2025-09-28 19:25:04,326 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api.github.com:443
+2025-09-28 19:25:05,141 - urllib3.connectionpool - DEBUG - https://api.github.com:443 "POST /graphql HTTP/1.1" 401 98
+2025-09-28 19:25:05,150 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api.github.com:443
+2025-09-28 19:25:05,986 - urllib3.connectionpool - DEBUG - https://api.github.com:443 "POST /graphql HTTP/1.1" 401 98
+2025-09-28 19:25:05,993 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api.github.com:443
+2025-09-28 19:25:06,752 - urllib3.connectionpool - DEBUG - https://api.github.com:443 "POST /graphql HTTP/1.1" 401 98
+2025-09-28 19:25:06,759 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api.github.com:443
+2025-09-28 19:25:07,585 - urllib3.connectionpool - DEBUG - https://api.github.com:443 "POST /graphql HTTP/1.1" 401 98
+2025-09-28 19:25:07,594 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api.github.com:443
+2025-09-28 19:25:08,488 - urllib3.connectionpool - DEBUG - https://api.github.com:443 "POST /graphql HTTP/1.1" 401 98
+2025-09-28 19:25:08,554 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/models/nonexistent/commits/main HTTP/1.1" 401 41
+2025-09-28 19:26:35,074 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): example.com:443
+2025-09-28 19:26:36,006 - urllib3.connectionpool - DEBUG - https://example.com:443 "HEAD / HTTP/1.1" 200 0
+2025-09-28 19:26:36,009 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): example.com:443
+2025-09-28 19:26:36,935 - urllib3.connectionpool - DEBUG - https://example.com:443 "GET / HTTP/1.1" 200 648
+2025-09-28 19:26:36,942 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): example.com:443
+2025-09-28 19:26:37,937 - urllib3.connectionpool - DEBUG - https://example.com:443 "HEAD / HTTP/1.1" 200 0
+2025-09-28 19:26:37,941 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): example.com:443
+2025-09-28 19:26:39,044 - urllib3.connectionpool - DEBUG - https://example.com:443 "GET / HTTP/1.1" 200 648
+2025-09-28 19:26:39,116 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/datasets/bookcorpus/bookcorpus HTTP/1.1" 200 2278
+2025-09-28 19:26:39,261 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/datasets/arjunpatel/best-selling-video-games HTTP/1.1" 200 1365
+2025-09-28 19:26:39,297 - root - INFO - Updating existing codebase at C:\Users\12605\AppData\Local\Temp\tmpglyhdesj\codebases\repo...
+2025-09-28 19:26:39,302 - root - INFO - Codebase updated at C:\Users\12605\AppData\Local\Temp\tmpglyhdesj\codebases\repo
+2025-09-28 19:26:39,310 - root - INFO - Cloning codebase from https://github.com/username/repo...
+2025-09-28 19:26:39,310 - root - ERROR - Failed to clone codebase from https://github.com/username/repo: Clone failed
+2025-09-28 19:26:39,315 - root - INFO - Cloning codebase from https://github.com/username/repo...
+2025-09-28 19:26:39,316 - root - INFO - Codebase cloned to C:\Users\12605\AppData\Local\Temp\tmp4exlu9et\codebases\repo
+2025-09-28 19:26:39,325 - root - INFO - Updating existing codebase at C:\Users\12605\AppData\Local\Temp\tmpl062ymro\codebases\repo...
+2025-09-28 19:26:39,326 - root - WARNING - Git update failed, re-cloning: Fetch failed
+2025-09-28 19:26:39,327 - root - INFO - Cloning codebase from https://github.com/username/repo...
+2025-09-28 19:26:39,328 - root - INFO - Codebase cloned to C:\Users\12605\AppData\Local\Temp\tmpl062ymro\codebases\repo
+2025-09-28 19:26:39,334 - root - INFO - Updating existing dataset at C:\Users\12605\AppData\Local\Temp\tmpnssm3u77\datasets\squad...
+2025-09-28 19:26:39,335 - root - INFO - Dataset ready at C:\Users\12605\AppData\Local\Temp\tmpnssm3u77\datasets\squad
+2025-09-28 19:26:39,341 - root - INFO - Downloading dataset from https://huggingface.co/datasets/squad...
+2025-09-28 19:26:39,342 - root - INFO - Dataset ready at C:\Users\12605\AppData\Local\Temp\tmpy0zoi7jg\datasets\squad
+2025-09-28 19:26:39,348 - root - INFO - Updating existing dataset at C:\Users\12605\AppData\Local\Temp\tmpctxbd_fe\datasets\squad...
+2025-09-28 19:26:39,349 - root - WARNING - Update failed, clearing and re-downloading: Update failed
+2025-09-28 19:26:39,350 - root - INFO - Dataset re-downloaded to C:\Users\12605\AppData\Local\Temp\tmpctxbd_fe\datasets\squad
+2025-09-28 19:26:39,356 - root - INFO - Updating existing model at C:\Users\12605\AppData\Local\Temp\tmpmb2uts8t\models\bert-base-uncased...
+2025-09-28 19:26:39,357 - root - INFO - Model ready at C:\Users\12605\AppData\Local\Temp\tmpmb2uts8t\models\bert-base-uncased
+2025-09-28 19:26:39,363 - root - INFO - Downloading model from https://huggingface.co/nonexistent/model...
+2025-09-28 19:26:39,364 - root - ERROR - Failed to download model from https://huggingface.co/nonexistent/model: Download failed
+2025-09-28 19:26:39,369 - root - INFO - Downloading model from https://huggingface.co/bert-base-uncased...
+2025-09-28 19:26:39,370 - root - INFO - Model ready at C:\Users\12605\AppData\Local\Temp\tmpz_tm356d\models\bert-base-uncased
+2025-09-28 19:26:39,371 - root - INFO - Cloning codebase from https://github.com/username/repo...
+2025-09-28 19:26:39,372 - root - INFO - Codebase cloned to C:\Users\12605\AppData\Local\Temp\tmpz_tm356d\codebases\repo
+2025-09-28 19:26:39,373 - root - INFO - Downloading dataset from https://huggingface.co/datasets/squad...
+2025-09-28 19:26:39,373 - root - INFO - Dataset ready at C:\Users\12605\AppData\Local\Temp\tmpz_tm356d\datasets\squad
+2025-09-28 19:26:39,382 - root - INFO - Updating existing model at C:\Users\12605\AppData\Local\Temp\tmp06io_x3q\models\bert-base-uncased...
+2025-09-28 19:26:39,383 - root - INFO - Model ready at C:\Users\12605\AppData\Local\Temp\tmp06io_x3q\models\bert-base-uncased
+2025-09-28 19:26:39,383 - root - INFO - Updating existing codebase at C:\Users\12605\AppData\Local\Temp\tmp06io_x3q\codebases\repo...
+2025-09-28 19:26:39,387 - root - INFO - Codebase updated at C:\Users\12605\AppData\Local\Temp\tmp06io_x3q\codebases\repo
+2025-09-28 19:26:39,387 - root - INFO - Updating existing dataset at C:\Users\12605\AppData\Local\Temp\tmp06io_x3q\datasets\squad...
+2025-09-28 19:26:39,388 - root - INFO - Dataset ready at C:\Users\12605\AppData\Local\Temp\tmp06io_x3q\datasets\squad
+2025-09-28 19:26:39,396 - root - INFO - Cloning codebase from https://github.com/username/repo...
+2025-09-28 19:26:39,397 - root - INFO - Codebase cloned to C:\Users\12605\AppData\Local\Temp\tmp9sx__mia\codebases\repo
+2025-09-28 19:26:39,402 - root - INFO - Downloading dataset from https://huggingface.co/datasets/squad...
+2025-09-28 19:26:39,403 - root - INFO - Dataset ready at C:\Users\12605\AppData\Local\Temp\tmpqivzbhw1\datasets\squad
+2025-09-28 19:26:39,408 - root - INFO - Downloading model from https://huggingface.co/bert-base-uncased...
+2025-09-28 19:26:39,409 - root - INFO - Model ready at C:\Users\12605\AppData\Local\Temp\tmpn18p41qk\models\bert-base-uncased
+2025-09-28 19:26:39,416 - root - INFO - Downloading model from https://huggingface.co/bert-base-uncased...
+2025-09-28 19:26:39,417 - root - INFO - Model ready at C:\Users\12605\AppData\Local\Temp\tmpkouvm970\models\bert-base-uncased
+2025-09-28 19:26:39,417 - root - INFO - Downloading dataset from https://huggingface.co/datasets/squad...
+2025-09-28 19:26:39,417 - root - INFO - Dataset ready at C:\Users\12605\AppData\Local\Temp\tmpkouvm970\datasets\squad
+2025-09-28 19:26:39,423 - root - INFO - Downloading model from https://huggingface.co/bert-base-uncased...
+2025-09-28 19:26:39,424 - root - INFO - Model ready at C:\Users\12605\AppData\Local\Temp\tmp31vw3ii2\models\bert-base-uncased
+2025-09-28 19:26:39,432 - root - INFO - Updating existing model at C:\Users\12605\AppData\Local\Temp\tmpttgdtry6\models\bert-base-uncased...
+2025-09-28 19:26:39,432 - root - WARNING - Update failed, clearing and re-downloading: Update failed
+2025-09-28 19:26:39,433 - root - INFO - Model re-downloaded to C:\Users\12605\AppData\Local\Temp\tmpttgdtry6\models\bert-base-uncased
+2025-09-28 19:26:54,755 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/models/sshleifer/tiny-distilroberta-base/revision/main HTTP/1.1" 200 1208
+2025-09-28 19:26:54,828 - filelock - DEBUG - Attempting to acquire lock 1706032653920 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\.gitignore.lock
+2025-09-28 19:26:54,835 - filelock - DEBUG - Lock 1706032653920 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\.gitignore.lock
+2025-09-28 19:26:54,837 - filelock - DEBUG - Attempting to release lock 1706032653920 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\.gitignore.lock
+2025-09-28 19:26:54,840 - filelock - DEBUG - Lock 1706032653920 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\.gitignore.lock
+2025-09-28 19:26:54,853 - filelock - DEBUG - Attempting to acquire lock 1706183132496 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:54,857 - filelock - DEBUG - Lock 1706183132496 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:54,867 - filelock - DEBUG - Attempting to release lock 1706183132496 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:54,872 - filelock - DEBUG - Lock 1706183132496 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:54,906 - filelock - DEBUG - Attempting to acquire lock 1706183136336 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:26:54,909 - filelock - DEBUG - Lock 1706183136336 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:26:54,910 - filelock - DEBUG - Attempting to release lock 1706183136336 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:26:54,914 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:26:54,922 - filelock - DEBUG - Attempting to acquire lock 1706113629712 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:26:54,925 - filelock - DEBUG - Lock 1706183136336 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:26:54,926 - filelock - DEBUG - Attempting to acquire lock 1706001729088 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:54,930 - filelock - DEBUG - Attempting to acquire lock 1706001696816 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:54,934 - filelock - DEBUG - Attempting to acquire lock 1706183315248 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:26:54,935 - filelock - DEBUG - Attempting to acquire lock 1706183313888 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:54,938 - filelock - DEBUG - Lock 1706113629712 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:26:54,944 - filelock - DEBUG - Attempting to acquire lock 1706114619216 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:54,946 - filelock - DEBUG - Lock 1706001729088 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:54,949 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:26:54,950 - filelock - DEBUG - Attempting to release lock 1706113629712 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:26:54,951 - filelock - DEBUG - Lock 1706183315248 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:26:54,951 - filelock - DEBUG - Lock 1706001696816 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:54,952 - filelock - DEBUG - Lock 1706183313888 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:54,953 - filelock - DEBUG - Attempting to release lock 1706001729088 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:54,954 - filelock - DEBUG - Lock 1706114619216 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:54,956 - filelock - DEBUG - Attempting to release lock 1706183315248 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:26:54,959 - filelock - DEBUG - Lock 1706113629712 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:26:54,959 - filelock - DEBUG - Attempting to release lock 1706001696816 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:54,960 - filelock - DEBUG - Attempting to release lock 1706183313888 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:54,961 - filelock - DEBUG - Attempting to release lock 1706114619216 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:54,962 - filelock - DEBUG - Lock 1706001729088 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:54,964 - filelock - DEBUG - Lock 1706183315248 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:26:54,968 - filelock - DEBUG - Lock 1706183313888 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:54,970 - filelock - DEBUG - Lock 1706001696816 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:54,975 - filelock - DEBUG - Lock 1706114619216 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:54,982 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:26:55,003 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:26:55,010 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:26:55,018 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:26:55,024 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:26:55,027 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:26:58,757 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/config.json HTTP/1.1" 307 0
+2025-09-28 19:26:58,763 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/.gitattributes HTTP/1.1" 307 0
+2025-09-28 19:26:58,795 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/pytorch_model.bin HTTP/1.1" 302 0
+2025-09-28 19:26:58,802 - filelock - DEBUG - Attempting to acquire lock 1706049107792 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:26:58,803 - filelock - DEBUG - Lock 1706049107792 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:26:58,810 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/flax_model.msgpack HTTP/1.1" 302 0
+2025-09-28 19:26:58,816 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/tf_model.h5 HTTP/1.1" 302 0
+2025-09-28 19:26:58,819 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/special_tokens_map.json HTTP/1.1" 307 0
+2025-09-28 19:26:58,824 - huggingface_hub.file_download - WARNING - Xet Storage is enabled for this repo, but the 'hf_xet' package is not installed. Falling back to regular HTTP download. For better performance, install the package with: `pip install huggingface_hub[hf_xet]` or `pip install hf_xet`
+2025-09-28 19:26:58,842 - filelock - DEBUG - Attempting to acquire lock 1706183400080 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:26:58,843 - filelock - DEBUG - Attempting to acquire lock 1706183405360 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:26:58,847 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/.gitattributes HTTP/1.1" 200 0
+2025-09-28 19:26:58,849 - filelock - DEBUG - Lock 1706183400080 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:26:58,850 - filelock - DEBUG - Lock 1706183405360 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:26:58,854 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/config.json HTTP/1.1" 200 0
+2025-09-28 19:26:58,860 - filelock - DEBUG - Attempting to acquire lock 1706182540912 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:58,865 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/tokenizer_config.json HTTP/1.1" 307 0
+2025-09-28 19:26:58,869 - filelock - DEBUG - Attempting to acquire lock 1706183624528 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:58,871 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/merges.txt HTTP/1.1" 307 0
+2025-09-28 19:26:58,878 - filelock - DEBUG - Lock 1706182540912 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:58,879 - filelock - DEBUG - Lock 1706183624528 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:58,878 - huggingface_hub.file_download - WARNING - Xet Storage is enabled for this repo, but the 'hf_xet' package is not installed. Falling back to regular HTTP download. For better performance, install the package with: `pip install huggingface_hub[hf_xet]` or `pip install hf_xet`
+2025-09-28 19:26:58,893 - huggingface_hub.file_download - WARNING - Xet Storage is enabled for this repo, but the 'hf_xet' package is not installed. Falling back to regular HTTP download. For better performance, install the package with: `pip install huggingface_hub[hf_xet]` or `pip install hf_xet`
+2025-09-28 19:26:58,902 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/special_tokens_map.json HTTP/1.1" 200 0
+2025-09-28 19:26:58,911 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/pytorch_model.bin HTTP/1.1" 302 1368
+2025-09-28 19:26:58,928 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/tokenizer_config.json HTTP/1.1" 200 0
+2025-09-28 19:26:58,935 - filelock - DEBUG - Attempting to acquire lock 1706112886192 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:58,953 - filelock - DEBUG - Lock 1706112886192 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:58,955 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): cas-bridge.xethub.hf.co:443
+2025-09-28 19:26:58,958 - filelock - DEBUG - Attempting to acquire lock 1706183509200 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:58,961 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/merges.txt HTTP/1.1" 200 0
+2025-09-28 19:26:58,965 - filelock - DEBUG - Lock 1706183509200 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:58,966 - filelock - DEBUG - Attempting to acquire lock 1706182062736 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:58,972 - filelock - DEBUG - Lock 1706182062736 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:58,996 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/tf_model.h5 HTTP/1.1" 302 1311
+2025-09-28 19:26:59,002 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/flax_model.msgpack HTTP/1.1" 302 1335
+2025-09-28 19:26:59,008 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/config.json HTTP/1.1" 200 474
+2025-09-28 19:26:59,028 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): cas-bridge.xethub.hf.co:443
+2025-09-28 19:26:59,041 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): cas-bridge.xethub.hf.co:443
+2025-09-28 19:26:59,049 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/merges.txt HTTP/1.1" 200 None
+2025-09-28 19:26:59,056 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/.gitattributes HTTP/1.1" 200 391
+2025-09-28 19:26:59,059 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/special_tokens_map.json HTTP/1.1" 200 150
+2025-09-28 19:26:59,062 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/tokenizer_config.json HTTP/1.1" 200 25
+2025-09-28 19:26:59,062 - filelock - DEBUG - Attempting to release lock 1706183624528 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:59,073 - filelock - DEBUG - Lock 1706183624528 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:59,080 - filelock - DEBUG - Attempting to acquire lock 1706183176656 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:59,086 - filelock - DEBUG - Lock 1706183176656 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:59,091 - filelock - DEBUG - Attempting to release lock 1706183176656 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:59,092 - filelock - DEBUG - Lock 1706183176656 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\config.json.lock
+2025-09-28 19:26:59,098 - filelock - DEBUG - Attempting to release lock 1706182540912 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:59,099 - filelock - DEBUG - Attempting to release lock 1706112886192 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:59,100 - filelock - DEBUG - Attempting to release lock 1706183509200 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:59,103 - filelock - DEBUG - Lock 1706112886192 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:59,104 - filelock - DEBUG - Lock 1706182540912 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:59,104 - filelock - DEBUG - Lock 1706183509200 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:59,106 - filelock - DEBUG - Attempting to acquire lock 1706183176128 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,111 - filelock - DEBUG - Attempting to acquire lock 1706183384976 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:59,113 - filelock - DEBUG - Attempting to acquire lock 1706183386896 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:59,113 - filelock - DEBUG - Lock 1706183176128 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,114 - filelock - DEBUG - Attempting to release lock 1706183176128 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,115 - filelock - DEBUG - Attempting to acquire lock 1706183369520 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:59,117 - filelock - DEBUG - Lock 1706183384976 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:59,117 - filelock - DEBUG - Lock 1706183176128 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,119 - filelock - DEBUG - Lock 1706183386896 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:59,120 - filelock - DEBUG - Lock 1706183369520 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:59,124 - filelock - DEBUG - Attempting to release lock 1706183384976 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:59,129 - filelock - DEBUG - Lock 1706183384976 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\special_tokens_map.json.lock
+2025-09-28 19:26:59,130 - filelock - DEBUG - Attempting to release lock 1706183369520 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:59,130 - filelock - DEBUG - Attempting to release lock 1706183386896 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:59,131 - filelock - DEBUG - Lock 1706183369520 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tokenizer_config.json.lock
+2025-09-28 19:26:59,132 - filelock - DEBUG - Lock 1706183386896 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\.gitattributes.lock
+2025-09-28 19:26:59,181 - filelock - DEBUG - Attempting to release lock 1706182062736 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:59,182 - filelock - DEBUG - Lock 1706182062736 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:59,185 - filelock - DEBUG - Attempting to acquire lock 1706183435088 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:59,189 - filelock - DEBUG - Lock 1706183435088 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:59,191 - filelock - DEBUG - Attempting to release lock 1706183435088 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:59,192 - filelock - DEBUG - Lock 1706183435088 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\merges.txt.lock
+2025-09-28 19:26:59,232 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /sshleifer/tiny-distilroberta-base/resolve/d305c58110158c865cb6746c62d4511d4148a934/vocab.json HTTP/1.1" 307 0
+2025-09-28 19:26:59,296 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "HEAD /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/vocab.json HTTP/1.1" 200 0
+2025-09-28 19:26:59,300 - filelock - DEBUG - Attempting to acquire lock 1706183353168 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,302 - filelock - DEBUG - Lock 1706183353168 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,376 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/resolve-cache/models/sshleifer/tiny-distilroberta-base/d305c58110158c865cb6746c62d4511d4148a934/vocab.json HTTP/1.1" 200 None
+2025-09-28 19:26:59,531 - filelock - DEBUG - Attempting to release lock 1706183353168 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,533 - filelock - DEBUG - Lock 1706183353168 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,537 - filelock - DEBUG - Attempting to acquire lock 1706175549792 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,539 - filelock - DEBUG - Lock 1706175549792 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,540 - filelock - DEBUG - Attempting to release lock 1706175549792 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:26:59,542 - filelock - DEBUG - Lock 1706175549792 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\vocab.json.lock
+2025-09-28 19:27:00,898 - urllib3.connectionpool - DEBUG - https://cas-bridge.xethub.hf.co:443 "GET /xet-bridge-us/621ffdc136468d709f18090b/498bfe3d41f5f6106001ac169d24fd79ae59923a6ff7dfef856f0ed65fccfddb?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=cas%2F20250928%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250928T232658Z&X-Amz-Expires=3600&X-Amz-Signature=98ce310bac8c794fd120cdd22d2ca985588f980852c7973a2e3963e4106fcde6&X-Amz-SignedHeaders=host&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27flax_model.msgpack%3B+filename%3D%22flax_model.msgpack%22%3B&x-id=GetObject&Expires=1759105618&Policy=eyJTdGF0ZW1lbnQiOlt7IkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc1OTEwNTYxOH19LCJSZXNvdXJjZSI6Imh0dHBzOi8vY2FzLWJyaWRnZS54ZXRodWIuaGYuY28veGV0LWJyaWRnZS11cy82MjFmZmRjMTM2NDY4ZDcwOWYxODA5MGIvNDk4YmZlM2Q0MWY1ZjYxMDYwMDFhYzE2OWQyNGZkNzlhZTU5OTIzYTZmZjdkZmVmODU2ZjBlZDY1ZmNjZmRkYioifV19&Signature=EnLEgFQgY-8CQh88jkKqQZWe-zHm~nEY2znb16B82Z6d8IV5zm38rOrA04AWDEj-s8oFtsnUI5v1vtWtwuUgWVIa5pl5ENws~bb5oaYE-4BQ-Mc~1nG00krPIVCgwsTxj3nxxpHu-oaKUQr8rwe8TiWZzxsXna7UC761Izi4W9XZaxAe-~jQnMc~cWRu1iwasU8a6LzsuK~7LWoWGUeBZypH6aq8QA9YIHTNUc5mzg8Cv7BTit7Oo8Rb-MfzZN7yb6j6zThFb~lQAgoAlNrk67WzqdGNPjFU3FpEo~r839jCEsG7jONGGJuZOpYv~Cc9NBs~2UJVfy6pE8JmDyqD~A__&Key-Pair-Id=K2L8F4GPSG1IFC HTTP/1.1" 200 609035
+2025-09-28 19:27:00,901 - urllib3.connectionpool - DEBUG - https://cas-bridge.xethub.hf.co:443 "GET /xet-bridge-us/621ffdc136468d709f18090b/460b2bc2b54d4c799b6a69b533c301a9d140d4a9a8de0a12fd5a194d24e1faf9?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=cas%2F20250928%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250928T232335Z&X-Amz-Expires=3600&X-Amz-Signature=b9c91453d538c86f6828d20844114d62f25959f03f24a0ab5c91d2c7b7444483&X-Amz-SignedHeaders=host&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27tf_model.h5%3B+filename%3D%22tf_model.h5%22%3B&x-id=GetObject&Expires=1759105415&Policy=eyJTdGF0ZW1lbnQiOlt7IkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc1OTEwNTQxNX19LCJSZXNvdXJjZSI6Imh0dHBzOi8vY2FzLWJyaWRnZS54ZXRodWIuaGYuY28veGV0LWJyaWRnZS11cy82MjFmZmRjMTM2NDY4ZDcwOWYxODA5MGIvNDYwYjJiYzJiNTRkNGM3OTliNmE2OWI1MzNjMzAxYTlkMTQwZDRhOWE4ZGUwYTEyZmQ1YTE5NGQyNGUxZmFmOSoifV19&Signature=CDWqYDxWB6v9cyWxsEhLDvDxJ6fCWn6mzaq9jxptZojC-WGd0C-ZwD-Lfr7Ut-kDnuNimSV4KaGR~qxt3AflKWAK9W207xpIg~XxR0xdpwXPqK9vwa1mjd3Q82~40CM01106B-0U~2SvCxaLSBTA2aCRxsNcK~9ufgF-ArJPEqC81bsQmum53fYYY-phLbJUjJofhSUHj0DVugKvoWqqCzwU-SYpi8-Ps9D3y6qRTfsU5so14WRu1pe4hOa78cZN7Tn6Td~2DeBxudhoLzeN0MfAlLtnEUjVUwHfvzZSPqTbdTBF9aiWSHGHXtq9UG0exoiRUliFyFpfDn6K6ZZdIw__&Key-Pair-Id=K2L8F4GPSG1IFC HTTP/1.1" 200 1090452
+2025-09-28 19:27:00,958 - urllib3.connectionpool - DEBUG - https://cas-bridge.xethub.hf.co:443 "GET /xet-bridge-us/621ffdc136468d709f18090b/24932a29a1407d8baf4e067b4f93332e7bb978ef2074f3c264d0d64ef7ea9d32?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=cas%2F20250928%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250928T232658Z&X-Amz-Expires=3600&X-Amz-Signature=23b5278d3b532239bc78c7a0a45a1969dbb555fbe74ef8c8bfceedaef1c828ac&X-Amz-SignedHeaders=host&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27pytorch_model.bin%3B+filename%3D%22pytorch_model.bin%22%3B&response-content-type=application%2Foctet-stream&x-id=GetObject&Expires=1759105618&Policy=eyJTdGF0ZW1lbnQiOlt7IkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc1OTEwNTYxOH19LCJSZXNvdXJjZSI6Imh0dHBzOi8vY2FzLWJyaWRnZS54ZXRodWIuaGYuY28veGV0LWJyaWRnZS11cy82MjFmZmRjMTM2NDY4ZDcwOWYxODA5MGIvMjQ5MzJhMjlhMTQwN2Q4YmFmNGUwNjdiNGY5MzMzMmU3YmI5NzhlZjIwNzRmM2MyNjRkMGQ2NGVmN2VhOWQzMioifV19&Signature=qr-845AewidVOOaEbR20nyM6HGSJwaoyI~ImFfG75nvNuBXXl4-NNVD6FRvUvmdQhC9D6dq-0w9j98YYn8liY-692eYqwO94yBu0-YLu4enGja49JlA1FxwxU8DoBsIdfifpYYrSD3fn~VU3FQFaVMTMUfLZuAiimZkHAMizqfx1OZCLMTvhQoZsEzaP2ZJ06jL4CX2qowj~zMdox-VaAakJb0CzS8aryqQKLM7Uan1BSj0cLf4~qSoz9J3TwUAgK9LT2q96BQZXDhtoSXcwjw9DNuP-JMOXLCx6UfgC8vrEB9In5UVczndpl528RT9CN8a3jOIIK9YfwE-OCq9ylQ__&Key-Pair-Id=K2L8F4GPSG1IFC HTTP/1.1" 200 617938
+2025-09-28 19:27:01,110 - filelock - DEBUG - Attempting to release lock 1706183405360 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:27:01,111 - filelock - DEBUG - Lock 1706183405360 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:27:01,113 - filelock - DEBUG - Attempting to acquire lock 1706174831696 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:27:01,114 - filelock - DEBUG - Lock 1706174831696 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:27:01,115 - filelock - DEBUG - Attempting to release lock 1706174831696 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:27:01,116 - filelock - DEBUG - Lock 1706174831696 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\flax_model.msgpack.lock
+2025-09-28 19:27:01,211 - filelock - DEBUG - Attempting to release lock 1706049107792 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:27:01,211 - filelock - DEBUG - Lock 1706049107792 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:27:01,214 - filelock - DEBUG - Attempting to acquire lock 1706051855824 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:27:01,215 - filelock - DEBUG - Lock 1706051855824 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:27:01,216 - filelock - DEBUG - Attempting to release lock 1706051855824 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:27:01,216 - filelock - DEBUG - Lock 1706051855824 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\pytorch_model.bin.lock
+2025-09-28 19:27:01,238 - filelock - DEBUG - Attempting to release lock 1706183400080 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:27:01,239 - filelock - DEBUG - Lock 1706183400080 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:27:01,241 - filelock - DEBUG - Attempting to acquire lock 1706051855632 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:27:01,242 - filelock - DEBUG - Lock 1706051855632 acquired on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:27:01,243 - filelock - DEBUG - Attempting to release lock 1706051855632 on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:27:01,244 - filelock - DEBUG - Lock 1706051855632 released on C:\Users\12605\AppData\Local\Temp\tmp_h72a0_2\model\sshleifer_tiny-distilroberta-base\.cache\huggingface\download\tf_model.h5.lock
+2025-09-28 19:27:02,152 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:27:02,980 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/models/invalid/repo HTTP/1.1" 401 41
+2025-09-28 19:27:02,986 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:27:03,773 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/models/invalid/repo HTTP/1.1" 401 41
+2025-09-28 19:27:03,780 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): huggingface.co:443
+2025-09-28 19:27:04,536 - urllib3.connectionpool - DEBUG - https://huggingface.co:443 "GET /api/models/invalid/repo HTTP/1.1" 401 41
+2025-09-28 19:27:04,653 - root - DEBUG - Coverage report:
+2025-09-28 19:27:04,653 - root - DEBUG - Name                            Stmts   Miss  Cover
+---------------------------------------------------
+__init__.py                         0      0   100%
+__main__.py                       174    164     6%
+config.py                          94     57    39%
+database.py                       147     31    79%
+download_manager.py               148     32    78%
+infer_dataset.py                   10      4    60%
+metric.py                          97     37    62%
+metrics\__init__.py                 0      0   100%
+metrics\bus_factor.py              91     32    65%
+metrics\code_quality.py            30     15    50%
+metrics\dataset_and_code.py        50     27    46%
+metrics\dataset_quality.py         39     14    64%
+metrics\license.py                 80     79     1%
+metrics\performance_claims.py      35     29    17%
+metrics\ramp_up_time.py            38     17    55%
+metrics\size_metric.py            161     58    64%
+url_parser.py                      11      5    55%
+workflow.py                        44     24    45%
+---------------------------------------------------
+TOTAL                            1249    625    50%
+
+2025-09-28 19:27:04,653 - root - DEBUG - Files measured for coverage: 18
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metrics\bus_factor.py
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metrics\ramp_up_time.py
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\infer_dataset.py
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\__main__.py
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\download_manager.py
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metrics\dataset_and_code.py
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metrics\dataset_quality.py
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\database.py
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metrics\size_metric.py
+2025-09-28 19:27:04,653 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metrics\__init__.py
+2025-09-28 19:27:04,654 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metrics\license.py
+2025-09-28 19:27:04,654 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metrics\code_quality.py
+2025-09-28 19:27:04,654 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\config.py
+2025-09-28 19:27:04,654 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\__init__.py
+2025-09-28 19:27:04,654 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metric.py
+2025-09-28 19:27:04,654 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\metrics\performance_claims.py
+2025-09-28 19:27:04,654 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\workflow.py
+2025-09-28 19:27:04,654 - root - DEBUG - Measured file: C:\Users\12605\HuggingFace-Model-Manager\src\url_parser.py
