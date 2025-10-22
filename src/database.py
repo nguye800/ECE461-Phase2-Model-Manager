@@ -203,19 +203,27 @@ class SQLiteAccessor:
             model_stats.net_score_latency,
         ]
 
-        # Add metric columns and values
+        # metric columns
         for metric in model_stats.metrics:
-            if isinstance(metric, FloatMetric):
-                columns.append(metric.name)
-                columns.append(f"{metric.name}_latency")
-                values.append(metric.data)
-                values.append(metric.latency)
+            name = metric.name
+            latency = getattr(metric, "latency", None)
+            data = getattr(metric, "data", None)
+
+            if isinstance(data, (int, float)):                 # scalar metric
+                columns.append(name)
+                values.append(float(data))
+                columns.append(f"{name}_latency")
+                values.append(latency)
+
+            elif isinstance(data, dict):                       # dict-shaped metric
+                for k, v in data.items():
+                    columns.append(f"{name}_{k}")
+                    values.append(v)
+                columns.append(f"{name}_latency")
+                values.append(latency)
+
             else:
-                for key, val in metric.data.items():
-                    columns.append(f"{metric.name}_{key}")
-                    values.append(val)
-                columns.append(f"{metric.name}_latency")
-                values.append(metric.latency)
+                raise TypeError(f"Unsupported metric.data for {name}: {type(data).__name__}")
 
         # Validate columns against database schema
         self.cursor.execute("PRAGMA table_info(models)")

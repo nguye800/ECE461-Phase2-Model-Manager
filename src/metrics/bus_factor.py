@@ -52,16 +52,39 @@ repository(name:"%s", owner:"%s"){
         # create dictionary of commit counts
         if self.response is None:
             return (0, {})
-        response_obj = json.loads(self.response.text)
         try:
-            response_obj["data"]["repository"]["refs"]["edges"]
-        except (TypeError, KeyError):
+            obj = json.loads(self.response.text)
+        except TypeError:
             raise ValueError("Repository is not public or does not exist")
+        
+        # GraphQL errors (common for invalid/private repos)
+        if obj.get("errors"):
+            # surface message or keep generic
+            msg = obj["errors"][0].get("message", "Repository is not public or does not exist")
+            raise ValueError(msg)
+
+        data = obj.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("Repository is not public or does not exist")
+
+        repo = data.get("repository")
+        if not repo:
+            raise ValueError("Repository is not public or does not exist")
+
+        refs = repo.get("refs") or {}
+        edges = refs.get("edges") or []
+
         commit_score: dict[str, int] = {}
         total_commits = 0
-        for branch in response_obj["data"]["repository"]["refs"]["edges"]:
-            for commit in branch["node"]["target"]["history"]["edges"]:
-                author = commit["node"]["author"]["email"]
+
+        for branch in edges:
+            history_edges = (
+                ((branch.get("node") or {}).get("target") or {}).get("history") or {}
+            ).get("edges", [])
+            for commit in history_edges:
+                author = ((commit.get("node") or {}).get("author") or {}).get("email")
+                if not author:
+                    continue
                 commit_score[author] = commit_score.get(author, 0) + 1
                 total_commits += 1
 
