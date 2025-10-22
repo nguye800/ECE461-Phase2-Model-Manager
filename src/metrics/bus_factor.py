@@ -44,7 +44,7 @@ repository(name:"%s", owner:"%s"){
         self.response = None
         super().__init__()
 
-    github_pattern = re.compile(r"(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)(?:\/.*)?$")
+    github_pattern = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git|/)?$")
 
     def get_response(self, url: str):
         """
@@ -58,7 +58,7 @@ repository(name:"%s", owner:"%s"){
         load_dotenv()  # ensure .env variables are loaded
 
         # Validate and extract owner/repo from URL
-        matches = github_pattern.match(url)
+        matches = github_pattern.match(url.strip())
         if matches is None:
             raise ValueError(f"Invalid GitHub URL: {url}")
 
