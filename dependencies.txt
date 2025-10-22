@@ -1,0 +1,15 @@
+typer
+pydantic
+sortedcontainers
+poetry
+coverage
+pylint
+toml
+spdx-license-matcher
+dotenv
+torch
+transformers
+accelerate
+huggingface_hub
+coverage[toml]
+GitPython
