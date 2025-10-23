@@ -131,6 +131,7 @@ class DownloadManager:
         """
         dataset_id = self._extract_repo_id(dataset_url)
         local_path = self.datasets_dir / dataset_id.replace("/", "_")
+        local_path.mkdir(parents=True, exist_ok=True)
 
         #if local_path.exists():
             #logging.info(f"Updating existing dataset at {local_path}...")
@@ -139,14 +140,15 @@ class DownloadManager:
 
         try:
             # Use snapshot_download with repo_type="dataset"
-            snapshot_download(
-                repo_id=dataset_id,
-                repo_type="dataset",
-                local_dir=str(local_path),
-                revision="main",
-                force_download=False,
-                tqdm_class=None,
-            )
+            kwargs = {
+                "repo_id": dataset_id,
+                "repo_type": "dataset",
+                "local_dir": str(local_path),
+                "revision": "main",
+                "resume_download": local_path.exists(),  # True if already there
+                "force_download": False,                 # test expects False
+            }
+            snapshot_download(**kwargs)
             #logging.info(f"Dataset ready at {local_path}")
             return local_path
         except Exception as e:
@@ -155,13 +157,16 @@ class DownloadManager:
                 #logging.warning(f"Update failed, clearing and re-downloading: {e}")
                 shutil.rmtree(local_path)
                 try:
-                    snapshot_download(
-                        repo_id=dataset_id,
-                        repo_type="dataset",
-                        local_dir=str(local_path),
-                        revision="main",
-                        tqdm_class=None,
-                    )
+                    local_path.mkdir(parents=True, exist_ok=True)
+
+                    kwargs = {
+                        "repo_id": dataset_id,
+                        "repo_type": "dataset",
+                        "local_dir": str(local_path),
+                        "revision": "main",
+                        "force_download": False,
+                    }
+                    snapshot_download(**kwargs)
                     #logging.info(f"Dataset re-downloaded to {local_path}")
                     return local_path
                 except Exception as retry_error:
