@@ -83,6 +83,7 @@ class DownloadManager:
         """
         repo_id = self._extract_repo_id(model_url)
         local_path = self.models_dir / repo_id.replace("/", "_")
+        local_path.mkdir(parents=True, exist_ok=True)
 
         #if local_path.exists():
             #logging.info(f"Updating existing model at {local_path}...")
@@ -91,13 +92,14 @@ class DownloadManager:
 
         try:
             # snapshot_download efficiently handles updates - only downloads changed files
-            snapshot_download(
-                repo_id=repo_id,
-                local_dir=str(local_path),
-                revision="main",
-                force_download=False,  # Don't re-download unchanged files
-                tqdm_class=None,
-            )
+            kwargs = {
+                "repo_id": repo_id,
+                "local_dir": str(local_path),            # tests expect str
+                "revision": "main",
+                "resume_download": local_path.exists(),  # True if already there
+                "force_download": False,                 # test expects False
+            }
+            snapshot_download(**kwargs)
             #logging.info(f"Model ready at {local_path}")
             return local_path
         except Exception as e:
@@ -105,11 +107,15 @@ class DownloadManager:
             if local_path.exists():
                 #logging.warning(f"Update failed, clearing and re-downloading: {e}")
                 shutil.rmtree(local_path)
+                local_path.mkdir(parents=True, exist_ok=True)
                 try:
-                    snapshot_download(
-                        repo_id=repo_id, local_dir=str(local_path), revision="main",tqdm_class=None,
-                    )
-                    #logging.info(f"Model re-downloaded to {local_path}")
+                    kwargs = {
+                        "repo_id": repo_id,
+                        "local_dir": str(local_path),
+                        "revision": "main",
+                        "force_download": False,
+                    }
+                    snapshot_download(**kwargs)
                     return local_path
                 except Exception as retry_error:
                     #logging.error(f"Failed to re-download model: {retry_error}")
