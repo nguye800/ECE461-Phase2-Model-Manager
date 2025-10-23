@@ -193,7 +193,8 @@ class DownloadManager:
 
                 # Fetch latest changes
                 # Suppress git progress output by passing progress=None
-                origin.fetch(progress=None, verbose=False)
+                fetch_kwargs = {}
+                origin.fetch(**fetch_kwargs)
 
                 # Get current branch
                 current_branch = repo.active_branch.name
@@ -211,8 +212,9 @@ class DownloadManager:
         # Clone repository (either doesn't exist or update failed)
         #logging.info(f"Cloning codebase from {code_url}...")
         try:
+            clone_kwargs = {}
             # Suppress clone progress output
-            git.Repo.clone_from(code_url, local_path, progress=None)
+            git.Repo.clone_from(code_url, local_path, **clone_kwargs)
             #logging.info(f"Codebase cloned to {local_path}")
             return local_path
         except Exception as e:
