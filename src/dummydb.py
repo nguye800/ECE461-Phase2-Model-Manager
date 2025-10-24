@@ -3,7 +3,7 @@ import tempfile
 import os
 import datetime
 import boto3
-from moto import mock_s3
+from moto import mock_aws
 
 
 def create_dummy_sqlite_db(db_path=None):
@@ -14,7 +14,7 @@ def create_dummy_sqlite_db(db_path=None):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    cursor.execute("""this
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS model_registry (
             model_id INTEGER PRIMARY KEY AUTOINCREMENT,
             repo_id TEXT,
@@ -63,6 +63,7 @@ def create_dummy_sqlite_db(db_path=None):
         ))
 
     conn.commit()
+    return conn
 
 
 def teardown_dummy_sqlite_db(conn, db_path=None):
@@ -72,10 +73,9 @@ def teardown_dummy_sqlite_db(conn, db_path=None):
         os.remove(db_path)
 
 # Moto automatically wipes state after exiting the @mock_s3 scope.
-@mock_s3
+@mock_aws
 def create_dummy_s3_environment():
     """Create a dummy S3 environment with fake files using Moto."""
-    s3 = boto3.client("s3", region_name="us-east-1")
     s3.create_bucket(Bucket="dummy-model-bucket")
 
     # Create fake model and logs
@@ -100,30 +100,23 @@ if __name__ == "__main__":
     conn = create_dummy_sqlite_db()
     print("Inserting a sample record...")
 
-    now = datetime.datetime.now().isoformat()
-    conn.execute("""
-        INSERT INTO model_registry (
-            repo_id, model_url, date_time_entered_to_db, likes, downloads,
-            license, github_link, github_numContributors, base_models_modelID,
-            base_model_urls, parameter_number, gb_size_of_model, dataset_link,
-            dataset_name, s3_location_of_model_zip,
-            s3_location_of_cloudwatch_log_for_database_entry
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        "repo123", "http://example.com/model", now, 120, 3456, "MIT",
-        "http://github.com/example/repo", 12, "base123", "http://example.com/base",
-        54000000, 1.2, "http://example.com/dataset", "example-dataset",
-        "s3://dummy-model-bucket/fake_model_zipfile.zip",
-        "s3://dummy-model-bucket/fake_aws_cloudwatch_systemactivity_logs.json"
-    ))
+    # Read data from SQLite example
+    print("\nFetching data from SQLite:")
+    cursor = conn.cursor()
+    cursor.execute("SELECT repo_id, model_url, license FROM model_registry LIMIT 3;")
+    for row in cursor.fetchall():
+        print(row)
 
-    conn.commit()
-    print("Sample record inserted.\n")
-
+    # setting up s3 and accessing contents example
+    """ NOTE: you need to do the boto3.client line to setup the "s3" mock before actually creating a bucket
+    boto3 is a aws sdk for python which reaches aws through s3 endpoint
+    mock_aws intercepts the boto3 calls and returns fake aws responses """
     print("Setting up dummy S3 environment...")
-    s3 = create_dummy_s3_environment()
-    print("Dummy files in S3:")
-    print(s3.list_objects_v2(Bucket="dummy-model-bucket")["Contents"])
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3 = create_dummy_s3_environment()
+        print("Dummy files in S3:")
+        print(s3.list_objects_v2(Bucket="dummy-model-bucket")["Contents"])
 
     print("\nTearing down...")
     db_path = os.path.join(tempfile.gettempdir(), "dummy_test_db.sqlite")
