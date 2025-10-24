@@ -3,9 +3,9 @@ from pathlib import Path
 import re
 import spdx_matcher
 
-metadata_pattern = re.compile(r"^license: (.*)$")
-heading_pattern = re.compile(r"^#+ *(.*)$")
-license_link_pattern = re.compile(r"\[.+\]\(LICENSE.*\)")
+metadata_pattern = re.compile(r"^license:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+heading_pattern = re.compile(r"^#{1,6}\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+license_link_pattern = re.compile(r"\[[^\]]+\]\((?:\.?/)?LICENSE(?:\.md)?\)", re.IGNORECASE)
 
 # full huggingface license list
 license_score: dict[str, float] = {
@@ -118,42 +118,38 @@ class LicenseMetric(BaseMetric):
         super().__init__()
 
     def parse_readme(self) -> float:
-        # find license heading or license metadata
+        full_text = Path(self.readme_file).read_text(encoding="utf-8")
+
+        # 1) YAML/front-matter style metadata “license: ...”
+        m = metadata_pattern.search(full_text)
         metadata_score = None
+        if m:
+            license_name = m.group(1).strip().lower()
+            metadata_score = license_score.get(license_name)
+
+        # 2) Extract the “License” section text (from the License heading to the next heading)
+        #    This avoids line-iterator state and makes link/SPDX extraction reliable.
+        section_re = re.compile(
+            r"^#{1,6}\s*license\s*$([\s\S]*?)(?=^#{1,6}\s+|\Z)",
+            re.IGNORECASE | re.MULTILINE
+        )
+        section_match = section_re.search(full_text)
         readme_score = None
-        license_section: str = ""
-        current_heading = None
-        with open(self.readme_file, "rt", encoding="utf-8") as file:
-            for line in file.readlines():
-                if current_heading is not None and current_heading.lower() == "license":
-                    license_section += line
-                # keep track of current heading
-                capture = heading_pattern.match(line)
-                if capture is not None:
-                    new_heading = capture.group(1)
-                    if type(new_heading) is str:
-                        current_heading = new_heading
 
-                # metadata license name
-                capture = metadata_pattern.match(line)
-                if capture is not None:
-                    license_name = capture.group(1)
-                    if type(license_name) == str:
-                        metadata_score = license_score.get(license_name)
+        if section_match:
+            license_section = section_match.group(1)
 
-        if license_section != "":
-            # search for links to the LICENSE file
-            matches = license_link_pattern.findall(license_section)
-            if len(matches) > 0:
+            # 2a) If the section links to LICENSE / LICENSE.md, defer to parse_license_file()
+            if license_link_pattern.search(license_section):
                 readme_score = self.parse_license_file()
             else:
-                licenses_detected, percent = spdx_matcher.analyse_license_text(license_text)
+                # 2b) Otherwise try SPDX detection on the section text itself
+                licenses_detected, _percent = spdx_matcher.analyse_license_text(license_section)
+                spdx_ids = list(licenses_detected.get("license", {}).keys())
+                if spdx_ids:
+                    readme_score = license_score.get(spdx_ids[0].lower(), 0.0)
 
-                spdx_ids = list(licenses_detected["license"].keys())
-                if spdx_ids: 
-                    spdx_id = spdx_ids[0].lower()
-                    readme_score = license_score.get(spdx_id, 0.0)
-
+        # 3) Choose the best available signal
         if readme_score is not None:
             return readme_score
         if metadata_score is not None:
@@ -203,8 +199,12 @@ class LicenseMetric(BaseMetric):
 
 # simple heuristic to catch non-commercial and copyleft licenses
 def heuristics_check(text: str) -> bool:
-    flagged_words: list[str] = ["non-commercial", "copyleft"]
-    for word in flagged_words:
-        if word in text:
-            return False
-    return True
+    t = text.lower()
+    # Block non-commercial style restrictions; DO NOT block “copyleft”
+    flagged_phrases = [
+        "non-commercial", "noncommercial",
+        "no commercial use", "not for commercial use",
+        "research purposes only", "research use only",
+        "non commercial", "noncommercial use"
+    ]
+    return not any(p in t for p in flagged_phrases)
