@@ -3,9 +3,9 @@ from pathlib import Path
 import re
 import spdx_matcher
 
-metadata_pattern = re.compile(r"^license:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-heading_pattern = re.compile(r"^#{1,6}\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
-license_link_pattern = re.compile(r"\[[^\]]+\]\((?:\.?/)?LICENSE(?:\.md)?\)", re.IGNORECASE)
+metadata_pattern = re.compile(r"^license: (.*)$")
+heading_pattern = re.compile(r"^#+ *(.*)$")
+license_link_pattern = re.compile(r"\[.+\]\(LICENSE.*\)")
 
 # full huggingface license list
 license_score: dict[str, float] = {
@@ -118,38 +118,42 @@ class LicenseMetric(BaseMetric):
         super().__init__()
 
     def parse_readme(self) -> float:
-        full_text = Path(self.readme_file).read_text(encoding="utf-8")
-
-        # 1) YAML/front-matter style metadata “license: ...”
-        m = metadata_pattern.search(full_text)
+        # find license heading or license metadata
         metadata_score = None
-        if m:
-            license_name = m.group(1).strip().lower()
-            metadata_score = license_score.get(license_name)
-
-        # 2) Extract the “License” section text (from the License heading to the next heading)
-        #    This avoids line-iterator state and makes link/SPDX extraction reliable.
-        section_re = re.compile(
-            r"^#{1,6}\s*license\s*$([\s\S]*?)(?=^#{1,6}\s+|\Z)",
-            re.IGNORECASE | re.MULTILINE
-        )
-        section_match = section_re.search(full_text)
         readme_score = None
+        license_section: str = ""
+        current_heading = None
+        with open(self.readme_file, "rt", encoding="utf-8") as file:
+            for line in file.readlines():
+                if current_heading is not None and current_heading.lower() == "license":
+                    license_section += line
+                # keep track of current heading
+                capture = heading_pattern.match(line)
+                if capture is not None:
+                    new_heading = capture.group(1)
+                    if type(new_heading) is str:
+                        current_heading = new_heading
 
-        if section_match:
-            license_section = section_match.group(1)
+                # metadata license name
+                capture = metadata_pattern.match(line)
+                if capture is not None:
+                    license_name = capture.group(1)
+                    if type(license_name) == str:
+                        metadata_score = license_score.get(license_name)
 
-            # 2a) If the section links to LICENSE / LICENSE.md, defer to parse_license_file()
-            if license_link_pattern.search(license_section):
+        if license_section != "":
+            # search for links to the LICENSE file
+            matches = license_link_pattern.findall(license_section)
+            if len(matches) > 0:
                 readme_score = self.parse_license_file()
             else:
-                # 2b) Otherwise try SPDX detection on the section text itself
-                licenses_detected, _percent = spdx_matcher.analyse_license_text(license_section)
-                spdx_ids = list(licenses_detected.get("license", {}).keys())
-                if spdx_ids:
-                    readme_score = license_score.get(spdx_ids[0].lower(), 0.0)
+                licenses_detected, percent = spdx_matcher.analyse_license_text(file.read())
 
-        # 3) Choose the best available signal
+                spdx_ids = list(licenses_detected["license"].keys())
+                if spdx_ids: 
+                    spdx_id = spdx_ids[0].lower()
+                    readme_score = license_score.get(spdx_id, 0.0)
+
         if readme_score is not None:
             return readme_score
         if metadata_score is not None:
@@ -159,24 +163,51 @@ class LicenseMetric(BaseMetric):
     def parse_license_file(self) -> float:
         if not self.license_file.exists():
             return 0.0
-        with open(self.license_file, "rt", encoding="utf-8") as file:
-            license_text = file.read()
-        # SPDX matcher returns a list of possible SPDX IDs
-        if not heuristics_check(license_text):
-            return 0.0
-        
-        licenses_detected, percent = spdx_matcher.analyse_license_text(license_text)
 
-        if not licenses_detected.get("license"):
+        license_text = self.license_file.read_text(encoding="utf-8", errors="ignore")
+        lt = license_text.lower()
+
+        # Block only non-commercial style phrases; allow mentions of “copyleft”.
+        if not heuristics_check(lt):
             return 0.0
-        
-        spdx_ids = list(licenses_detected["license"].keys())
+
+        # Try SPDX detection (handle different return shapes)
+        spdx_ids: list[str] = []
+        try:
+            detected, _percent = spdx_matcher.analyse_license_text(license_text)
+
+            if isinstance(detected, dict):
+                # Common shape: {"license": { "MIT": {...}, "Apache-2.0": {...} }}
+                if isinstance(detected.get("license"), dict):
+                    spdx_ids = list(detected["license"].keys())
+
+                # Alt shape: {"licenses": { "MIT": {...} }}
+                elif isinstance(detected.get("licenses"), dict):
+                    spdx_ids = list(detected["licenses"].keys())
+
+                # Alt shape: {"matches": [{ "spdx_id": "MIT" }, ...]}
+                elif isinstance(detected.get("matches"), list):
+                    spdx_ids = [m.get("spdx_id") for m in detected["matches"] if m.get("spdx_id")]
+        except Exception:
+            # Don’t crash scoring on matcher issues
+            pass
+
+        # Heuristic fallback if SPDX didn’t give us an ID
         if not spdx_ids:
-            return 0.0
-        
+            # MIT
+            if "mit license" in lt or "permission is hereby granted, free of charge" in lt:
+                return license_score["mit"]
+            # LGPL (prefer v2.1 if text indicates; otherwise default to v3+ per your table)
+            if "gnu lesser general public license" in lt or " lgpl" in lt:
+                if "version 2.1" in lt or "version 2.1-only" in lt or "version 2.1 or later" in lt:
+                    return license_score["lgpl-2.1+"]
+                return license_score["lgpl-3.0+"]
+            # Apache-2.0
+            if "apache license" in lt and "version 2.0" in lt:
+                return license_score["apache-2.0"]
+
         spdx_id = spdx_ids[0].lower()
-        score = license_score.get(spdx_id, 0.0)
-        return score
+        return license_score.get(spdx_id, 0.0)
 
     def calculate_score(self) -> float:
         if self.local_directory is None or self.local_directory.model is None:
