@@ -9,3 +9,8 @@ from datetime import datetime
 
 class TreeScoreMetric(BaseMetric):
     metric_name: str = "tree_score"
+    graphql_query = # base models
+
+    def __init__(self):
+        self.response = None
+        super().__init__()

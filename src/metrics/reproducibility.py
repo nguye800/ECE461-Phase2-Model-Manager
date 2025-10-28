@@ -9,3 +9,8 @@ from datetime import datetime
 
 class ReproducibilityMetric(BaseMetric):
     metric_name: str = "reproducibility"
+    graphql_query = # demo code from model card
+
+    def __init__(self):
+        self.response = None
+        super().__init__()
