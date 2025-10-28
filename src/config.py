@@ -1,5 +1,7 @@
 import os
+import pydantic
 from pydantic import BaseModel, field_validator
+pydantic.main.BaseModel.model_config = {"protected_namespaces": ()}
 from typing import Literal, Optional
 from typing_extensions import override
 from abc import ABC, abstractmethod
