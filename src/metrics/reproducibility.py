@@ -35,7 +35,7 @@ class ReproducibilityMetric(BaseMetric):
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             return response.text
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             print(f"Error fetching model card: {e}")
             return None
 

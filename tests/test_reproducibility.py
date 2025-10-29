@@ -1,10 +1,7 @@
 import unittest
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, MagicMock
 from src.metrics.reproducibility import ReproducibilityMetric
 from src.metric import ModelURLs
-import tempfile
-import os
-
 
 class TestReproducibilityMetric(unittest.TestCase):
     metric_instance: ReproducibilityMetric

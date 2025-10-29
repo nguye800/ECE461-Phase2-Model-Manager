@@ -85,7 +85,7 @@ class ModelURLs(BaseModel):
     Stores URLs related to a model, including model, codebase, and dataset URLs.
     """
 
-    model: str
+    model: Optional[str] = None
     codebase: Optional[str] = None
     dataset: Optional[str] = None
 
