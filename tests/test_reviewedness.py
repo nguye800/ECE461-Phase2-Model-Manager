@@ -17,9 +17,8 @@ class TestReviewednessMetric(unittest.TestCase):
         urls = ModelURLs(model="nonexistent")
         urls.codebase = "sdvx.org"
         self.metric_instance.set_url(urls)
-        owner, repo = self.metric_instance._get_owner_repo()
-        self.assertIsNone(owner)
-        self.assertIsNone(repo)
+        with self.assertRaises(ValueError):
+            self.metric_instance._get_owner_repo()
 
     def test_valid_github_url(self):
         urls = ModelURLs(model="nonexistent")
@@ -138,8 +137,8 @@ class TestReviewednessMetric(unittest.TestCase):
         urls = ModelURLs(model="nonexistent")
         urls.codebase = "invalid-url"
         self.metric_instance.set_url(urls)
-        score = self.metric_instance.calculate_score()
-        self.assertEqual(score, -1.0)
+        with self.assertRaises(ValueError):
+            self.metric_instance.calculate_score()
 
     # Mock-based integration tests
 
