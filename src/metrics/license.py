@@ -147,7 +147,7 @@ class LicenseMetric(BaseMetric):
             if len(matches) > 0:
                 readme_score = self.parse_license_file()
             else:
-                licenses_detected, percent = spdx_matcher.analyse_license_text(license_text)
+                licenses_detected, percent = spdx_matcher.analyse_license_text(file.read())
 
                 spdx_ids = list(licenses_detected["license"].keys())
                 if spdx_ids: 
@@ -163,24 +163,51 @@ class LicenseMetric(BaseMetric):
     def parse_license_file(self) -> float:
         if not self.license_file.exists():
             return 0.0
-        with open(self.license_file, "rt", encoding="utf-8") as file:
-            license_text = file.read()
-        # SPDX matcher returns a list of possible SPDX IDs
-        if not heuristics_check(license_text):
-            return 0.0
-        
-        licenses_detected, percent = spdx_matcher.analyse_license_text(license_text)
 
-        if not licenses_detected.get("license"):
+        license_text = self.license_file.read_text(encoding="utf-8", errors="ignore")
+        lt = license_text.lower()
+
+        # Block only non-commercial style phrases; allow mentions of “copyleft”.
+        if not heuristics_check(lt):
             return 0.0
-        
-        spdx_ids = list(licenses_detected["license"].keys())
+
+        # Try SPDX detection (handle different return shapes)
+        spdx_ids: list[str] = []
+        try:
+            detected, _percent = spdx_matcher.analyse_license_text(license_text)
+
+            if isinstance(detected, dict):
+                # Common shape: {"license": { "MIT": {...}, "Apache-2.0": {...} }}
+                if isinstance(detected.get("license"), dict):
+                    spdx_ids = list(detected["license"].keys())
+
+                # Alt shape: {"licenses": { "MIT": {...} }}
+                elif isinstance(detected.get("licenses"), dict):
+                    spdx_ids = list(detected["licenses"].keys())
+
+                # Alt shape: {"matches": [{ "spdx_id": "MIT" }, ...]}
+                elif isinstance(detected.get("matches"), list):
+                    spdx_ids = [m.get("spdx_id") for m in detected["matches"] if m.get("spdx_id")]
+        except Exception:
+            # Don’t crash scoring on matcher issues
+            pass
+
+        # Heuristic fallback if SPDX didn’t give us an ID
         if not spdx_ids:
-            return 0.0
-        
+            # MIT
+            if "mit license" in lt or "permission is hereby granted, free of charge" in lt:
+                return license_score["mit"]
+            # LGPL (prefer v2.1 if text indicates; otherwise default to v3+ per your table)
+            if "gnu lesser general public license" in lt or " lgpl" in lt:
+                if "version 2.1" in lt or "version 2.1-only" in lt or "version 2.1 or later" in lt:
+                    return license_score["lgpl-2.1+"]
+                return license_score["lgpl-3.0+"]
+            # Apache-2.0
+            if "apache license" in lt and "version 2.0" in lt:
+                return license_score["apache-2.0"]
+
         spdx_id = spdx_ids[0].lower()
-        score = license_score.get(spdx_id, 0.0)
-        return score
+        return license_score.get(spdx_id, 0.0)
 
     def calculate_score(self) -> float:
         if self.local_directory is None or self.local_directory.model is None:
@@ -203,8 +230,12 @@ class LicenseMetric(BaseMetric):
 
 # simple heuristic to catch non-commercial and copyleft licenses
 def heuristics_check(text: str) -> bool:
-    flagged_words: list[str] = ["non-commercial", "copyleft"]
-    for word in flagged_words:
-        if word in text:
-            return False
-    return True
+    t = text.lower()
+    # Block non-commercial style restrictions; DO NOT block “copyleft”
+    flagged_phrases = [
+        "non-commercial", "noncommercial",
+        "no commercial use", "not for commercial use",
+        "research purposes only", "research use only",
+        "non commercial", "noncommercial use"
+    ]
+    return not any(p in t for p in flagged_phrases)

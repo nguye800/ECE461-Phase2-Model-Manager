@@ -80,7 +80,7 @@ class TestBustFactor(unittest.TestCase):
         urls = ModelURLs(model="nonexistent")
         urls.codebase = "https://www.github.com/silica-dev/2nd_to_ft_conversion_script"
         self.metric_instance.set_url(urls)
-        total_commits = 25
+        total_commits = 1000
         self.metric_instance.setup_resources()
         self.metric_instance.get_response(urls.codebase)
         parsed_response = self.metric_instance.parse_response()

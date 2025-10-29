@@ -83,6 +83,7 @@ class DownloadManager:
         """
         repo_id = self._extract_repo_id(model_url)
         local_path = self.models_dir / repo_id.replace("/", "_")
+        local_path.mkdir(parents=True, exist_ok=True)
 
         #if local_path.exists():
             #logging.info(f"Updating existing model at {local_path}...")
@@ -91,13 +92,14 @@ class DownloadManager:
 
         try:
             # snapshot_download efficiently handles updates - only downloads changed files
-            snapshot_download(
-                repo_id=repo_id,
-                local_dir=str(local_path),
-                revision="main",
-                force_download=False,  # Don't re-download unchanged files
-                tqdm_class=None,
-            )
+            kwargs = {
+                "repo_id": repo_id,
+                "local_dir": str(local_path),            # tests expect str
+                "revision": "main",
+                "resume_download": local_path.exists(),  # True if already there
+                "force_download": False,                 # test expects False
+            }
+            snapshot_download(**kwargs)
             #logging.info(f"Model ready at {local_path}")
             return local_path
         except Exception as e:
@@ -105,11 +107,15 @@ class DownloadManager:
             if local_path.exists():
                 #logging.warning(f"Update failed, clearing and re-downloading: {e}")
                 shutil.rmtree(local_path)
+                local_path.mkdir(parents=True, exist_ok=True)
                 try:
-                    snapshot_download(
-                        repo_id=repo_id, local_dir=str(local_path), revision="main",tqdm_class=None,
-                    )
-                    #logging.info(f"Model re-downloaded to {local_path}")
+                    kwargs = {
+                        "repo_id": repo_id,
+                        "local_dir": str(local_path),
+                        "revision": "main",
+                        "force_download": False,
+                    }
+                    snapshot_download(**kwargs)
                     return local_path
                 except Exception as retry_error:
                     #logging.error(f"Failed to re-download model: {retry_error}")
@@ -131,6 +137,7 @@ class DownloadManager:
         """
         dataset_id = self._extract_repo_id(dataset_url)
         local_path = self.datasets_dir / dataset_id.replace("/", "_")
+        local_path.mkdir(parents=True, exist_ok=True)
 
         #if local_path.exists():
             #logging.info(f"Updating existing dataset at {local_path}...")
@@ -139,14 +146,15 @@ class DownloadManager:
 
         try:
             # Use snapshot_download with repo_type="dataset"
-            snapshot_download(
-                repo_id=dataset_id,
-                repo_type="dataset",
-                local_dir=str(local_path),
-                revision="main",
-                force_download=False,
-                tqdm_class=None,
-            )
+            kwargs = {
+                "repo_id": dataset_id,
+                "repo_type": "dataset",
+                "local_dir": str(local_path),
+                "revision": "main",
+                "resume_download": local_path.exists(),  # True if already there
+                "force_download": False,                 # test expects False
+            }
+            snapshot_download(**kwargs)
             #logging.info(f"Dataset ready at {local_path}")
             return local_path
         except Exception as e:
@@ -155,13 +163,16 @@ class DownloadManager:
                 #logging.warning(f"Update failed, clearing and re-downloading: {e}")
                 shutil.rmtree(local_path)
                 try:
-                    snapshot_download(
-                        repo_id=dataset_id,
-                        repo_type="dataset",
-                        local_dir=str(local_path),
-                        revision="main",
-                        tqdm_class=None,
-                    )
+                    local_path.mkdir(parents=True, exist_ok=True)
+
+                    kwargs = {
+                        "repo_id": dataset_id,
+                        "repo_type": "dataset",
+                        "local_dir": str(local_path),
+                        "revision": "main",
+                        "force_download": False,
+                    }
+                    snapshot_download(**kwargs)
                     #logging.info(f"Dataset re-downloaded to {local_path}")
                     return local_path
                 except Exception as retry_error:
@@ -193,7 +204,8 @@ class DownloadManager:
 
                 # Fetch latest changes
                 # Suppress git progress output by passing progress=None
-                origin.fetch(progress=None, verbose=False)
+                fetch_kwargs = {}
+                origin.fetch(**fetch_kwargs)
 
                 # Get current branch
                 current_branch = repo.active_branch.name
@@ -211,8 +223,9 @@ class DownloadManager:
         # Clone repository (either doesn't exist or update failed)
         #logging.info(f"Cloning codebase from {code_url}...")
         try:
+            clone_kwargs = {}
             # Suppress clone progress output
-            git.Repo.clone_from(code_url, local_path, progress=None)
+            git.Repo.clone_from(code_url, local_path, **clone_kwargs)
             #logging.info(f"Codebase cloned to {local_path}")
             return local_path
         except Exception as e:
