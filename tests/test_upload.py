@@ -1,4 +1,5 @@
 import base64
+import importlib.machinery
 import io
 import json
 import os
@@ -8,37 +9,45 @@ import unittest
 import zipfile
 from unittest.mock import MagicMock, patch
 
-if "boto3" not in sys.modules:  # pragma: no cover - test-only dependency shim
-    boto3_module = types.ModuleType("boto3")
-    session_module = types.ModuleType("boto3.session")
+# Always stub boto3/botocore to avoid importing hefty dependencies in tests.
+boto3_module = types.ModuleType("boto3")
+session_module = types.ModuleType("boto3.session")
+boto3_module.__spec__ = importlib.machinery.ModuleSpec("boto3", loader=None)  # type: ignore[attr-defined]
+session_module.__spec__ = importlib.machinery.ModuleSpec("boto3.session", loader=None)  # type: ignore[attr-defined]
 
-    class _FakeSession:
-        def client(self, service_name):
-            return MagicMock(name=f"{service_name}_client")
 
-    session_module.Session = _FakeSession
-    boto3_module.session = session_module
-    sys.modules["boto3"] = boto3_module
-    sys.modules["boto3.session"] = session_module
+class _FakeSession:
+    def client(self, service_name):
+        return MagicMock(name=f"{service_name}_client")
 
-if "botocore" not in sys.modules:  # pragma: no cover - test-only dependency shim
-    botocore_module = types.ModuleType("botocore")
-    exceptions_module = types.ModuleType("botocore.exceptions")
 
-    class _FakeBotoCoreError(Exception):
-        pass
+session_module.Session = _FakeSession
+boto3_module.session = session_module
+sys.modules["boto3"] = boto3_module
+sys.modules["boto3.session"] = session_module
 
-    class _FakeClientError(Exception):
-        def __init__(self, error_response, operation_name):
-            super().__init__(error_response, operation_name)
-            self.response = error_response
-            self.operation_name = operation_name
+botocore_module = types.ModuleType("botocore")
+exceptions_module = types.ModuleType("botocore.exceptions")
+botocore_module.__spec__ = importlib.machinery.ModuleSpec("botocore", loader=None)  # type: ignore[attr-defined]
+exceptions_module.__spec__ = importlib.machinery.ModuleSpec("botocore.exceptions", loader=None)  # type: ignore[attr-defined]
 
-    exceptions_module.BotoCoreError = _FakeBotoCoreError
-    exceptions_module.ClientError = _FakeClientError
-    botocore_module.exceptions = exceptions_module
-    sys.modules["botocore"] = botocore_module
-    sys.modules["botocore.exceptions"] = exceptions_module
+
+class _FakeBotoCoreError(Exception):
+    pass
+
+
+class _FakeClientError(Exception):
+    def __init__(self, error_response, operation_name):
+        super().__init__(error_response, operation_name)
+        self.response = error_response
+        self.operation_name = operation_name
+
+
+exceptions_module.BotoCoreError = _FakeBotoCoreError
+exceptions_module.ClientError = _FakeClientError
+botocore_module.exceptions = exceptions_module
+sys.modules["botocore"] = botocore_module
+sys.modules["botocore.exceptions"] = exceptions_module
 
 import src.upload as upload
 
