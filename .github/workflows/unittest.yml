@@ -23,6 +23,8 @@ jobs:
       - name: Run tests with coverage
         env:
           PYTHONPATH: src
+          GITHUB_TOKEN: dummy-token
+          HF_HUB_DISABLE_PROGRESS_BARS: "1"
         run: |
           coverage run -m unittest discover -s tests
 
