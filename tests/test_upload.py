@@ -1,42 +1,53 @@
 import base64
+import importlib.machinery
+import io
 import json
 import os
 import sys
 import types
 import unittest
+import zipfile
 from unittest.mock import MagicMock, patch
 
-if "boto3" not in sys.modules:  # pragma: no cover - test-only dependency shim
-    boto3_module = types.ModuleType("boto3")
-    session_module = types.ModuleType("boto3.session")
+# Always stub boto3/botocore to avoid importing hefty dependencies in tests.
+boto3_module = types.ModuleType("boto3")
+session_module = types.ModuleType("boto3.session")
+boto3_module.__spec__ = importlib.machinery.ModuleSpec("boto3", loader=None)  # type: ignore[attr-defined]
+session_module.__spec__ = importlib.machinery.ModuleSpec("boto3.session", loader=None)  # type: ignore[attr-defined]
 
-    class _FakeSession:
-        def client(self, service_name):
-            return MagicMock(name=f"{service_name}_client")
 
-    session_module.Session = _FakeSession
-    boto3_module.session = session_module
-    sys.modules["boto3"] = boto3_module
-    sys.modules["boto3.session"] = session_module
+class _FakeSession:
+    def client(self, service_name):
+        return MagicMock(name=f"{service_name}_client")
 
-if "botocore" not in sys.modules:  # pragma: no cover - test-only dependency shim
-    botocore_module = types.ModuleType("botocore")
-    exceptions_module = types.ModuleType("botocore.exceptions")
 
-    class _FakeBotoCoreError(Exception):
-        pass
+session_module.Session = _FakeSession
+boto3_module.session = session_module
+sys.modules["boto3"] = boto3_module
+sys.modules["boto3.session"] = session_module
 
-    class _FakeClientError(Exception):
-        def __init__(self, error_response, operation_name):
-            super().__init__(error_response, operation_name)
-            self.response = error_response
-            self.operation_name = operation_name
+botocore_module = types.ModuleType("botocore")
+exceptions_module = types.ModuleType("botocore.exceptions")
+botocore_module.__spec__ = importlib.machinery.ModuleSpec("botocore", loader=None)  # type: ignore[attr-defined]
+exceptions_module.__spec__ = importlib.machinery.ModuleSpec("botocore.exceptions", loader=None)  # type: ignore[attr-defined]
 
-    exceptions_module.BotoCoreError = _FakeBotoCoreError
-    exceptions_module.ClientError = _FakeClientError
-    botocore_module.exceptions = exceptions_module
-    sys.modules["botocore"] = botocore_module
-    sys.modules["botocore.exceptions"] = exceptions_module
+
+class _FakeBotoCoreError(Exception):
+    pass
+
+
+class _FakeClientError(Exception):
+    def __init__(self, error_response, operation_name):
+        super().__init__(error_response, operation_name)
+        self.response = error_response
+        self.operation_name = operation_name
+
+
+exceptions_module.BotoCoreError = _FakeBotoCoreError
+exceptions_module.ClientError = _FakeClientError
+botocore_module.exceptions = exceptions_module
+sys.modules["botocore"] = botocore_module
+sys.modules["botocore.exceptions"] = exceptions_module
 
 import src.upload as upload
 
@@ -45,7 +56,25 @@ ClientError = upload.ClientError
 
 def _sample_event() -> dict:
     """Build a minimal valid upload event."""
-    artifact_body = base64.b64encode(b"dummy model bytes").decode("utf-8")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "config.json",
+            json.dumps(
+                {
+                    "model_name": "TestModel",
+                    "num_parameters": 123456,
+                    "base_model": "SomeBaseModel",
+                }
+            ),
+        )
+        archive.writestr(
+            "README.md",
+            "This model uses https://huggingface.co/datasets/example/dataset\n",
+        )
+        archive.writestr("weights.bin", "fake-bytes")
+
+    artifact_body = base64.b64encode(buffer.getvalue()).decode("utf-8")
     return {
         "model_id": "model-123",
         "model_url": "https://huggingface.co/example/model-123",
@@ -55,8 +84,6 @@ def _sample_event() -> dict:
             "downloads": 50,
             "gb_size_of_model": 1.5,
         },
-        "dataset_link": "https://huggingface.co/datasets/example/dataset",
-        "dataset_name": "example/dataset",
         "code_repository": "https://github.com/example/model-123",
         "artifacts": [
             {
@@ -66,6 +93,14 @@ def _sample_event() -> dict:
             }
         ],
     }
+
+
+def _sample_event_without_metadata() -> dict:
+    event = _sample_event()
+    event["metadata"] = {}
+    event.pop("dataset_link", None)
+    event.pop("dataset_name", None)
+    return event
 
 
 class UploadHandlerTests(unittest.TestCase):
@@ -199,6 +234,21 @@ class UploadHandlerTests(unittest.TestCase):
         body = json.loads(response["body"])
         self.assertEqual(body["status"], "error")
         self.assertEqual(body["message"], "AWS service failure")
+
+    def test_zip_metadata_enriched_when_missing(self):
+        event = _sample_event_without_metadata()
+        request = upload.UploadRequest.from_event(event)
+
+        s3_mock = MagicMock()
+        s3_mock.put_object.return_value = {"VersionId": "1"}
+
+        with patch.object(upload, "_get_s3_client", return_value=s3_mock):
+            artifacts = upload._upload_artifacts(request, "test-bucket")
+
+        self.assertTrue(any(a["size_bytes"] is not None for a in artifacts))
+        self.assertIsNotNone(request.metadata.get("gb_size_of_model"))
+        self.assertEqual(request.dataset_link, "https://huggingface.co/datasets/example/dataset")
+        self.assertEqual(request.metadata.get("base_models_modelID"), "SomeBaseModel")
 
 
 if __name__ == "__main__":
