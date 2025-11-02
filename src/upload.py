@@ -22,12 +22,15 @@ Environment variables used:
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
+import zipfile
 
 import boto3
 from boto3.session import Session
@@ -193,11 +196,13 @@ def _upload_artifacts(request: UploadRequest, bucket: str) -> List[Dict[str, Any
 
     for artifact in request.artifacts:
         target_key = artifact.resolve_target_key(prefix)
+        extracted_metadata: Dict[str, Any] = {}
 
         try:
             if artifact.body is not None:
                 LOGGER.info("Uploading artifact '%s' to s3://%s/%s", artifact.name, bucket, target_key)
                 binary_body = base64.b64decode(artifact.body)
+                extracted_metadata = _extract_zip_metadata(artifact, binary_body)
                 response = s3_client.put_object(
                     Bucket=bucket,
                     Key=target_key,
@@ -238,12 +243,118 @@ def _upload_artifacts(request: UploadRequest, bucket: str) -> List[Dict[str, Any
                     "bucket": bucket,
                     "key": target_key,
                     "version_id": version_id,
+                    "size_bytes": len(binary_body) if artifact.body is not None else None,
                 }
             )
+            _apply_extracted_metadata(request, extracted_metadata)
         except (BotoCoreError, ClientError) as err:
             raise UploadError(f"Failed to upload artifact '{artifact.name}': {err}") from err
+        except Exception as err:
+            LOGGER.warning(
+                "Unexpected issue while processing artifact '%s': %s", artifact.name, err
+            )
 
     return results
+
+
+def _extract_first_url(text: str) -> Optional[str]:
+    match = re.search(r"https?://\S+", text)
+    return match.group(0) if match else None
+
+
+def _extract_zip_metadata(artifact: ArtifactDescriptor, data: bytes) -> Dict[str, Any]:
+    """
+    Attempt to gather metadata from a ZIP archive containing the model payload.
+    """
+    info: Dict[str, Any] = {}
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            info["zip_file_count"] = len(members)
+            info["total_uncompressed_bytes"] = sum(member.file_size for member in members)
+            info["zip_sample_listing"] = [member.filename for member in members[:20]]
+
+            # Attempt to read config.json for model metadata
+            for candidate in ("config.json", "model_index.json"):
+                if candidate in archive.namelist():
+                    with archive.open(candidate) as config_file:
+                        try:
+                            config_data = json.load(config_file)
+                            info["config_model_name"] = (
+                                config_data.get("model_name")
+                                or config_data.get("_name_or_path")
+                                or config_data.get("architectures", [None])[0]
+                            )
+                            base_model = (
+                                config_data.get("base_model")
+                                or config_data.get("parent_model")
+                                or config_data.get("model_type")
+                            )
+                            if base_model:
+                                info["base_model"] = base_model
+                            param_count = (
+                                config_data.get("num_parameters")
+                                or config_data.get("model_size")
+                            )
+                            if param_count:
+                                info["parameter_number"] = param_count
+                        except json.JSONDecodeError:
+                            LOGGER.debug("Config file in %s is not valid JSON", artifact.name)
+                    break
+
+            # Examine README for dataset references
+            readme_name = next(
+                (name for name in archive.namelist() if name.lower().startswith("readme")),
+                None,
+            )
+            if readme_name:
+                with archive.open(readme_name) as readme_file:
+                    readme_text = readme_file.read().decode("utf-8", errors="ignore")
+                    dataset_link = _extract_first_url(readme_text)
+                    if dataset_link:
+                        info["dataset_link"] = dataset_link
+                        info["dataset_name"] = dataset_link.rstrip("/").split("/")[-1]
+
+    except zipfile.BadZipFile:
+        LOGGER.debug("Artifact '%s' is not a ZIP archive or is corrupted.", artifact.name)
+    except Exception as err:  # pragma: no cover - defensive logging
+        LOGGER.warning("Failed to extract metadata from artifact '%s': %s", artifact.name, err)
+
+    return info
+
+
+def _apply_extracted_metadata(request: UploadRequest, extracted: Dict[str, Any]) -> None:
+    """
+    Merge automatically derived metadata into the request metadata so it can be
+    persisted in the registry.
+    """
+    if not extracted:
+        return
+
+    metadata = request.metadata
+
+    total_bytes = extracted.get("total_uncompressed_bytes")
+    if total_bytes and "gb_size_of_model" not in metadata:
+        metadata["gb_size_of_model"] = round(total_bytes / (1024**3), 4)
+
+    if extracted.get("parameter_number") and "parameter_number" not in metadata:
+        metadata["parameter_number"] = extracted["parameter_number"]
+
+    if extracted.get("base_model") and "base_models_modelID" not in metadata:
+        metadata["base_models_modelID"] = extracted["base_model"]
+
+    if not request.dataset_link and extracted.get("dataset_link"):
+        request.dataset_link = extracted["dataset_link"]
+
+    if not request.dataset_name and extracted.get("dataset_name"):
+        request.dataset_name = extracted["dataset_name"]
+
+    if extracted.get("config_model_name") and "parsed_model_name" not in metadata:
+        metadata["parsed_model_name"] = extracted["config_model_name"]
+
+    if extracted.get("zip_sample_listing") and "zip_sample_listing" not in metadata:
+        metadata["zip_sample_listing"] = extracted["zip_sample_listing"]
 
 
 def _record_exists(rds_config: RDSConfig, model_id: str) -> bool:
@@ -275,6 +386,9 @@ def _build_db_parameters(
         (artifact for artifact in artifacts if "log" in artifact["artifact_name"].lower()),
         None,
     )
+
+    if metadata.get("gb_size_of_model") is None and model_artifact and model_artifact.get("size_bytes"):
+        metadata["gb_size_of_model"] = round(model_artifact["size_bytes"] / (1024**3), 4)
 
     return {
         "repo_id": request.model_id,
