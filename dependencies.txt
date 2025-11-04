@@ -16,3 +16,5 @@ coverage[toml]
 GitPython
 boto3
 moto
+hf_xet
+typing_extensions

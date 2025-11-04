@@ -32,6 +32,9 @@ from metrics.license import LicenseMetric
 from metrics.code_quality import CodeQualityMetric
 from metrics.size_metric import SizeMetric
 from metrics.dataset_quality import DatasetQualityMetric
+from metrics.reviewedness import ReviewednessMetric
+from metrics.reproducibility import ReproducibilityMetric
+from metrics.tree_score import TreeScoreMetric
 from url_parser import read_url_csv
 from download_manager import DownloadManager
 from infer_dataset import get_linked_dataset_metrics
@@ -113,13 +116,14 @@ def stage_metrics(config: ConfigContract):
     stager.attach_metric(DatasetAndCodeScoreMetric(), 2)
     stager.attach_metric(DatasetQualityMetric(), 1)
     stager.attach_metric(CodeQualityMetric(), 1)
+    stager.attach_metric(ReproducibilityMetric(), 1)
+    stager.attach_metric(ReviewednessMetric(), 1)
+    stager.attach_metric(TreeScoreMetric(), 1)
 
     return stager
 
 
-def calculate_metrics(
-    model_urls: ModelURLs, config: ConfigContract, stager: MetricStager
-) -> ModelStats:  # do we have a funciton to infer urls?
+def calculate_metrics(model_urls: ModelURLs, config: ConfigContract, stager: MetricStager) -> ModelStats:  # do we have a funciton to infer urls?
     """
     Calculate all metrics for a given model
     """
@@ -298,6 +302,9 @@ def analyze(url_file: Path):
             FloatMetric("dataset_and_code_score", 0.0, 0),
             FloatMetric("dataset_quality", 0.0, 0),
             FloatMetric("code_quality", 0.0, 0),
+            FloatMetric("reproducibility", 0.0, 0),
+            FloatMetric("reviewedness", 0.0, 0),
+            FloatMetric("tree_score", 0.0, 0),
         ]
 
         db = SQLiteAccessor(PROD_DATABASE_PATH, basic_schema)

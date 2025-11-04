@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import os, re
 from types import SimpleNamespace
 from datetime import datetime, timedelta
-from graphql_queries import (GET_DEFAULT_BRANCH, GET_LATEST_COMMIT, LAST_N_MERGED_PRS)
+from metrics.graphql_queries import (GET_DEFAULT_BRANCH, GET_LATEST_COMMIT, LAST_N_MERGED_PRS)
 
 github_pattern = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)(?:/(?:tree|blob)/[^/]+)?/?$")
 
