@@ -270,7 +270,9 @@ class TreeScoreMetric(BaseMetric):
         print(f"[TreeScore] Model repo_id: {repo_id}")
         print(f"[TreeScore] Discovered parents: {parents if parents else 'None'}")
         if not parents:
-            return 0.0
+            # Do not penalize models without detected parents
+            print("[TreeScore] No parents detected; returning neutral score 1.0")
+            return 1.0
 
         # Build a lightweight config for inner evaluations
         local_storage = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_storage")

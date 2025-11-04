@@ -42,12 +42,13 @@ class TestTreeScore(unittest.TestCase):
         self.assertIsInstance(parents, set)
         self.assertEqual(len(parents), 0)
 
-    def test_score_zero_when_no_parents(self):
+    def test_score_neutral_when_no_parents(self):
         base_model = "https://huggingface.co/bert-base-uncased"
         metric = TreeScoreMetric()
         metric.set_url(ModelURLs(model=base_model))
         score = metric.run().score
-        self.assertEqual(score, 0.0)
+        # Neutral score (no penalty) when no parents are found
+        self.assertEqual(score, 1.0)
 
 
 if __name__ == "__main__":

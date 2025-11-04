@@ -333,12 +333,12 @@ def analyze(url_file: Path):
                     download_manager.download_model_resources(model_urls)
                     logging.info("Download completed successfully.")
                 except Exception as e:
-                    typer.echo(f"Error downloading resources: {e}")
-                    continue
+                    # Proceed without local files; some metrics (e.g., size, tree_score) can still run
+                    typer.echo(f"Warning: Skipping downloads for {model_url}: {e}")
 
                 # check for pre-existing datasets
                 model_path = generate_model_paths(config, model_urls).model
-                if model_path is not None:
+                if model_path is not None and (model_path / "README.md").exists():
                     dataset_check = get_linked_dataset_metrics(
                         model_path / "README.md",
                         db,

@@ -96,7 +96,7 @@ class TestDownloadManager(unittest.TestCase):
             repo_id="bert-base-uncased",
             local_dir=str(self.models_dir / "bert-base-uncased"),
             revision="main",
-            resume_download=True,
+            force_download=True,
             force_download=False,
         )
 
@@ -117,7 +117,7 @@ class TestDownloadManager(unittest.TestCase):
             repo_id="bert-base-uncased",
             local_dir=str(local_path),
             revision="main",
-            resume_download=True,
+            force_download=True,
             force_download=False,
         )
 
@@ -171,7 +171,7 @@ class TestDownloadManager(unittest.TestCase):
             repo_type="dataset",
             local_dir=str(self.datasets_dir / "squad"),
             revision="main",
-            resume_download=True,
+            force_download=True,
             force_download=False,
         )
 
@@ -193,7 +193,7 @@ class TestDownloadManager(unittest.TestCase):
             repo_type="dataset",
             local_dir=str(local_path),
             revision="main",
-            resume_download=True,
+            force_download=True,
             force_download=False,
         )
 
@@ -448,7 +448,7 @@ class TestDownloadManager(unittest.TestCase):
             repo_type="dataset",
             local_dir=str(self.datasets_dir / "squad"),
             revision="main",
-            resume_download=True,
+            force_download=True,
             force_download=False,
         )
 
