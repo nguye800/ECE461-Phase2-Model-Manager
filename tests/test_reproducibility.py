@@ -345,54 +345,70 @@ pip install torch
 
     # LLM debugging tests
 
-    @patch('src.metrics.reproducibility.requests.post')
-    def test_llm_debug_success(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.text = "print('Fixed code')"
-        mock_post.return_value = mock_response
+    @patch('src.metrics.reproducibility.brt.converse')
+    def test_llm_debug_success(self, mock_converse):
+        mock_converse.return_value = {
+            "output": {
+                "message": {
+                    "content": [
+                        {"text": "print('Fixed code')"}
+                    ]
+                }
+            }
+        }
 
-        with patch.dict('os.environ', {'GEN_AI_STUDIO_API_KEY': 'fake_key'}):
-            with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
-                fixed_code, success = self.metric_instance._use_llm_to_debug(
-                    "print('broken code')", 
-                    "SyntaxError"
-                )
-                self.assertTrue(success)
-                self.assertIsNotNone(fixed_code)
+        with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
+            fixed_code, success = self.metric_instance._use_llm_to_debug(
+                "print('broken code')",
+                "SyntaxError"
+            )
+            self.assertTrue(success)
+            self.assertIsNotNone(fixed_code)
 
-    @patch('src.metrics.reproducibility.requests.post')
-    def test_llm_debug_failure(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.text = "print('Still broken')"
-        mock_post.return_value = mock_response
+    @patch('src.metrics.reproducibility.brt.converse')
+    def test_llm_debug_failure(self, mock_converse):
+        mock_converse.return_value = {
+            "output": {
+                "message": {
+                    "content": [
+                        {"text": "print('Still broken')"}
+                    ]
+                }
+            }
+        }
 
-        with patch.dict('os.environ', {'GEN_AI_STUDIO_API_KEY': 'fake_key'}):
-            with patch.object(self.metric_instance, '_test_code_execution', return_value='failure'):
-                fixed_code, success = self.metric_instance._use_llm_to_debug(
-                    "print('broken code')", 
-                    "SyntaxError"
-                )
-                self.assertFalse(success)
+        with patch.object(self.metric_instance, '_test_code_execution', return_value='failure'):
+            fixed_code, success = self.metric_instance._use_llm_to_debug(
+                "print('broken code')",
+                "SyntaxError"
+            )
+            self.assertFalse(success)
 
-    def test_llm_debug_missing_api_key(self):
-        with patch.dict('os.environ', {}, clear=True):
-            with self.assertRaises(RuntimeError):
-                self.metric_instance._use_llm_to_debug("code", "error")
+    def test_llm_debug_bedrock_exception(self):
+        with patch('src.metrics.reproducibility.brt.converse', side_effect=Exception("Bedrock error")):
+            fixed_code, success = self.metric_instance._use_llm_to_debug("code", "error")
+            self.assertFalse(success)
+            self.assertIsNone(fixed_code)
 
-    @patch('src.metrics.reproducibility.requests.post')
-    def test_llm_debug_removes_markdown(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.text = "```python\nprint('Hello')\n```"
-        mock_post.return_value = mock_response
+    @patch('src.metrics.reproducibility.brt.converse')
+    def test_llm_debug_removes_markdown(self, mock_converse):
+        mock_converse.return_value = {
+            "output": {
+                "message": {
+                    "content": [
+                        {"text": "```python\nprint('Hello')\n```"}
+                    ]
+                }
+            }
+        }
 
-        with patch.dict('os.environ', {'GEN_AI_STUDIO_API_KEY': 'fake_key'}):
-            with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
-                fixed_code, success = self.metric_instance._use_llm_to_debug(
-                    "broken", 
-                    "error"
-                )
-                self.assertNotIn("```", fixed_code)
-                self.assertIn("print('Hello')", fixed_code)
+        with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
+            fixed_code, success = self.metric_instance._use_llm_to_debug(
+                "broken",
+                "error"
+            )
+            self.assertNotIn("```", fixed_code)
+            self.assertIn("print('Hello')", fixed_code)
 
     # Integration tests with mocking
 
