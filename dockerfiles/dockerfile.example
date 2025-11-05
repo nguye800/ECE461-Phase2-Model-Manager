@@ -1,0 +1,74 @@
+###############
+# 1. Base Image
+###############
+FROM python:3.10-slim AS base
+
+# Optional: Disable Python buffering/logging issues
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+###############################
+# 2. System dependencies layer
+###############################
+# Install build tools or OS packages if needed
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+ && rm -rf /var/lib/apt/lists/*
+
+
+##################################
+# 3. Create app directory & user
+##################################
+# Create a non-root user (good security practice)
+RUN useradd -m appuser
+WORKDIR /app
+
+################################
+# 4. Copy requirement files first
+################################
+# This allows Docker to cache dependency installation
+COPY requirements.txt .
+
+####################################
+# 5. Install Python dependencies
+####################################
+RUN pip install --no-cache-dir -r requirements.txt
+
+#########################
+# 6. Copy application code
+#########################
+COPY . .
+
+####################################
+# 7. Set environment variables
+####################################
+ENV APP_ENV=production \
+    APP_PORT=8080
+
+####################################
+# 8. Expose ports for documentation
+####################################
+# Expose does NOT actually publish ports; it's informational.
+EXPOSE 8080
+
+####################################
+# 9. Add a healthcheck (optional)
+####################################
+HEALTHCHECK --interval=30s --timeout=3s \
+  CMD curl --fail http://localhost:8080/health || exit 1
+
+####################################
+# 10. Use non-root user
+####################################
+USER appuser
+
+####################################
+# 11. Entrypoint + CMD
+####################################
+# ENTRYPOINT is the main executable
+ENTRYPOINT ["python", "main.py"]
+
+# CMD provides default arguments but can be overridden
+CMD ["--serve"]
