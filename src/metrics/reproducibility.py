@@ -123,15 +123,35 @@ class ReproducibilityMetric(BaseMetric):
         )
 
         try:
-            res = brt.converse(
+            # Prepare Anthropic Claude request payload for invoke_model
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 2000,
+                "temperature": 0.0,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt}
+                        ]
+                    }
+                ]
+            }
+
+            res = brt.invoke_model(
                 modelId=BEDROCK_MODEL_ID,
-                messages=[{"role": "user", "content": [{"text": prompt}]}],
-                inferenceConfig={"maxTokens": 2000, "temperature": 0.0}
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body)
             )
 
-            # Extract text content from Bedrock response
-            content = res.get("output", {}).get("message", {}).get("content", [])
-            text_parts = [c.get("text", "") for c in content if isinstance(c, dict) and "text" in c]
+            # Body is a streaming payload; read and parse JSON
+            raw = res.get("body")
+            payload = json.loads(raw.read().decode("utf-8")) if hasattr(raw, "read") else json.loads(raw)
+
+            # Extract text segments from Anthropic response content
+            content = payload.get("content", [])
+            text_parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
             fixed_code = "\n".join([t for t in text_parts if t]).strip()
 
             # If the model still returned fenced code, strip fences

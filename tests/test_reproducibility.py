@@ -1,4 +1,5 @@
 import unittest
+import json
 from unittest.mock import patch, MagicMock
 from src.metrics.reproducibility import ReproducibilityMetric
 from src.metric import ModelURLs
@@ -345,17 +346,17 @@ pip install torch
 
     # LLM debugging tests
 
-    @patch('src.metrics.reproducibility.brt.converse')
-    def test_llm_debug_success(self, mock_converse):
-        mock_converse.return_value = {
-            "output": {
-                "message": {
-                    "content": [
-                        {"text": "print('Fixed code')"}
-                    ]
-                }
-            }
+    @patch('src.metrics.reproducibility.brt.invoke_model')
+    def test_llm_debug_success(self, mock_invoke):
+        body_payload = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "print('Fixed code')"}
+            ]
         }
+        mock_invoke.return_value = {"body": MagicMock(read=MagicMock(return_value=json.dumps(body_payload).encode("utf-8")))}
 
         with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
             fixed_code, success = self.metric_instance._use_llm_to_debug(
@@ -365,17 +366,17 @@ pip install torch
             self.assertTrue(success)
             self.assertIsNotNone(fixed_code)
 
-    @patch('src.metrics.reproducibility.brt.converse')
-    def test_llm_debug_failure(self, mock_converse):
-        mock_converse.return_value = {
-            "output": {
-                "message": {
-                    "content": [
-                        {"text": "print('Still broken')"}
-                    ]
-                }
-            }
+    @patch('src.metrics.reproducibility.brt.invoke_model')
+    def test_llm_debug_failure(self, mock_invoke):
+        body_payload = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "print('Still broken')"}
+            ]
         }
+        mock_invoke.return_value = {"body": MagicMock(read=MagicMock(return_value=json.dumps(body_payload).encode("utf-8")))}
 
         with patch.object(self.metric_instance, '_test_code_execution', return_value='failure'):
             fixed_code, success = self.metric_instance._use_llm_to_debug(
@@ -385,22 +386,22 @@ pip install torch
             self.assertFalse(success)
 
     def test_llm_debug_bedrock_exception(self):
-        with patch('src.metrics.reproducibility.brt.converse', side_effect=Exception("Bedrock error")):
+        with patch('src.metrics.reproducibility.brt.invoke_model', side_effect=Exception("Bedrock error")):
             fixed_code, success = self.metric_instance._use_llm_to_debug("code", "error")
             self.assertFalse(success)
             self.assertIsNone(fixed_code)
 
-    @patch('src.metrics.reproducibility.brt.converse')
-    def test_llm_debug_removes_markdown(self, mock_converse):
-        mock_converse.return_value = {
-            "output": {
-                "message": {
-                    "content": [
-                        {"text": "```python\nprint('Hello')\n```"}
-                    ]
-                }
-            }
+    @patch('src.metrics.reproducibility.brt.invoke_model')
+    def test_llm_debug_removes_markdown(self, mock_invoke):
+        body_payload = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "```python\nprint('Hello')\n```"}
+            ]
         }
+        mock_invoke.return_value = {"body": MagicMock(read=MagicMock(return_value=json.dumps(body_payload).encode("utf-8")))}
 
         with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
             fixed_code, success = self.metric_instance._use_llm_to_debug(
