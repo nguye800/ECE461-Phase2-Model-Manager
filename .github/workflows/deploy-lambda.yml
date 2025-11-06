@@ -27,6 +27,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Debug GitHub context
+        run: |
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_REF_NAME=$GITHUB_REF_NAME"
+          echo "GITHUB_REPOSITORY=$GITHUB_REPOSITORY"
+
       # (Optional) build/test steps could go here
       # e.g., lint Dockerfile, run unit tests, etc.
 
