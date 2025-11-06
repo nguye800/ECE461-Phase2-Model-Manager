@@ -15,6 +15,7 @@ huggingface_hub
 coverage[toml]
 GitPython
 boto3
+botocore
 moto
 hf_xet
 typing_extensions
