@@ -11,12 +11,12 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  AWS_ACCOUNT_ID: 965919626283          
+  AWS_ACCOUNT_ID: 965919626283      
   LAMBDA_FUNCTION_NAME: Route
-  ECR_REPOSITORY: route-lambda-repo      
-  IMAGE_TAG: latest                      
+  ECR_REPOSITORY: ece461/function-containers    
+  IMAGE_TAG: latest
   RATE_LAMBDA_FUNCTION_NAME: Rate
-  RATE_ECR_REPOSITORY: rate-lambda-repo
+  RATE_ECR_REPOSITORY: ece461/function-containers
   RATE_DOCKERFILE: dockerfiles/dockerfile.rate
   RATE_IMAGE_TAG: latest
 
