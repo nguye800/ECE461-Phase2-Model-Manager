@@ -1,0 +1,74 @@
+name: Deploy AWS Lambda (Container Image)
+
+on:
+  push:
+    branches:
+      - main  # Deploy when code is merged to main
+
+permissions:
+  id-token: write      # needed for OIDC
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: 965919626283          
+  LAMBDA_FUNCTION_NAME: Route
+  ECR_REPOSITORY: route-lambda-repo      
+  IMAGE_TAG: latest                      
+  RATE_LAMBDA_FUNCTION_NAME: Rate
+  RATE_ECR_REPOSITORY: rate-lambda-repo
+  RATE_DOCKERFILE: dockerfiles/dockerfile.rate
+  RATE_IMAGE_TAG: latest
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # (Optional) build/test steps could go here
+      # e.g., lint Dockerfile, run unit tests, etc.
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+
+      - name: Update Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+
+      - name: Build, tag, and push rate Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.RATE_DOCKERFILE }} -t $ECR_REGISTRY/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
+
+      - name: Update rate Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
+
+      - name: Confirm deployment
+        run: |
+          aws lambda get-function --function-name ${{ env.LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
