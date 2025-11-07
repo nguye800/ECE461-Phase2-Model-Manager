@@ -1,0 +1,82 @@
+name: Deploy Artifact Lambdas (Container Image)
+
+on:
+  push:
+    branches:
+      - main
+      - upload_dev
+      - download_dev
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: 965919626283
+  ECR_REPOSITORY: ece461/function-containers
+  LAMBDA_DOCKERFILE: dockerfiles/Dockerfile.lambda
+  BASE_IMAGE_TAG: artifacts-base-latest
+  UPLOAD_IMAGE_TAG: upload-latest
+  DOWNLOAD_IMAGE_TAG: download-latest
+  METADATA_IMAGE_TAG: metadata-latest
+  UPLOAD_LAMBDA_FUNCTION_NAME: Upload
+  DOWNLOAD_LAMBDA_FUNCTION_NAME: Download
+  METADATA_LAMBDA_FUNCTION_NAME: Metadata
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push Lambda container images
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.LAMBDA_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} .
+          docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
+            $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
+          docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
+            $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DOWNLOAD_IMAGE_TAG }}
+          docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
+            $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }}
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DOWNLOAD_IMAGE_TAG }}
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
+
+      # Uncomment once the Upload Lambda exists and you want automatic deployments
+      # - name: Update upload Lambda image
+      #   run: |
+      #     aws lambda update-function-code \
+      #       --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }} \
+      #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
+
+      # Uncomment once the Download Lambda exists and you want automatic deployments
+      # - name: Update download Lambda image
+      #   run: |
+      #     aws lambda update-function-code \
+      #       --function-name ${{ env.DOWNLOAD_LAMBDA_FUNCTION_NAME }} \
+      #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.DOWNLOAD_IMAGE_TAG }}
+
+      # Uncomment once the Metadata Lambda exists and you want automatic deployments
+      # - name: Update metadata Lambda image
+      #   run: |
+      #     aws lambda update-function-code \
+      #       --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }} \
+      #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
