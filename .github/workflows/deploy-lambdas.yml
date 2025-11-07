@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: us-east-2
   AWS_ACCOUNT_ID: 965919626283
   ECR_REPOSITORY: route-lambda-repo
   LAMBDA_DOCKERFILE: dockerfiles/Dockerfile.lambda
