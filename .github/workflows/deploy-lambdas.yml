@@ -14,7 +14,7 @@ permissions:
 env:
   AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: 965919626283
-  ECR_REPOSITORY: ece461/function-containers
+  ECR_REPOSITORY: route-lambda-repo
   LAMBDA_DOCKERFILE: dockerfiles/Dockerfile.lambda
   BASE_IMAGE_TAG: artifacts-base-latest
   UPLOAD_IMAGE_TAG: upload-latest
