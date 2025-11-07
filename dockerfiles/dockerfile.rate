@@ -1,7 +1,9 @@
 FROM public.ecr.aws/lambda/python:3.11
 
 # Ensure system packages required by GitPython and HuggingFace downloads exist
-RUN yum install -y git gcc gcc-c++ make \
+RUN yum install -y git gcc10 gcc10-c++ make \
+    && alternatives --install /usr/bin/gcc gcc /opt/rh/gcc10/usr/bin/gcc 30 \
+    && alternatives --install /usr/bin/g++ g++ /opt/rh/gcc10/usr/bin/g++ 30 \
     && yum clean all
 
 # Install Python dependencies
