@@ -18,10 +18,8 @@ env:
   LAMBDA_DOCKERFILE: dockerfiles/Dockerfile.lambda
   BASE_IMAGE_TAG: artifacts-base-latest
   UPLOAD_IMAGE_TAG: upload-latest
-  DOWNLOAD_IMAGE_TAG: download-latest
   METADATA_IMAGE_TAG: metadata-latest
   UPLOAD_LAMBDA_FUNCTION_NAME: Upload
-  DOWNLOAD_LAMBDA_FUNCTION_NAME: Download
   METADATA_LAMBDA_FUNCTION_NAME: Metadata
 
 jobs:
@@ -52,12 +50,9 @@ jobs:
           docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
             $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
           docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
-            $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DOWNLOAD_IMAGE_TAG }}
-          docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
             $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }}
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
-          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DOWNLOAD_IMAGE_TAG }}
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
 
       # Uncomment once the Upload Lambda exists and you want automatic deployments
@@ -66,13 +61,6 @@ jobs:
       #     aws lambda update-function-code \
       #       --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }} \
       #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
-
-      # Uncomment once the Download Lambda exists and you want automatic deployments
-      # - name: Update download Lambda image
-      #   run: |
-      #     aws lambda update-function-code \
-      #       --function-name ${{ env.DOWNLOAD_LAMBDA_FUNCTION_NAME }} \
-      #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.DOWNLOAD_IMAGE_TAG }}
 
       # Uncomment once the Metadata Lambda exists and you want automatic deployments
       # - name: Update metadata Lambda image

@@ -21,10 +21,10 @@ for run test:
   1. Point the Lambda to the corresponding ECR image tag.
   2. Set the handler (for container images this is the `Command` field) to `upload.lambda_handler`, `download.lambda_handler`, or `metadata.lambda_handler`.
   3. Create/Update the API Gateway routes:
-     - `POST /artifacts/{type}` → Upload Lambda
-     - `PUT /artifacts/{type}/{id}` → Upload Lambda
-     - `GET /artifacts/{type}/{id}` → Download Lambda
-     - `GET /artifact/{type}/{id}/lineage`, `/cost`, `/audit`, `POST /artifact/model/{id}/license-check` → Metadata Lambda
+    - `POST /artifacts/{type}` → Upload Lambda
+    - `PUT /artifacts/{type}/{id}` → Upload Lambda
+    - `GET /artifacts/{type}/{id}` → Metadata Lambda (returns metadata + presigned download URLs)
+    - `GET /artifact/{type}/{id}/lineage`, `/cost`, `/audit`, `POST /artifact/model/{id}/license-check` → Metadata Lambda
 
 ## Metadata Lambda Configuration
 

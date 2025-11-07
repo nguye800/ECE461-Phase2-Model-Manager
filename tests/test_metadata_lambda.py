@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import sys
@@ -81,6 +82,11 @@ class StubTable:
             "base_models": [{"model_id": "base-1"}],
             "gb_size_of_model": 2.5,
             "license": "Apache-2.0",
+            "assets": {
+                "bucket": "demo-bucket",
+                "model_zip_key": "demo/model/model.zip",
+                "log_key": "demo/model/log.json",
+            },
         }
         self.audit_items = [
             {
@@ -105,23 +111,28 @@ class MetadataLambdaTests(unittest.TestCase):
         self.table = StubTable()
         self.patch = patch("src.metadata._get_table", return_value=self.table)
         self.patch.start()
+        self.s3_patch = patch("src.metadata._s3_client", return_value=FakeS3())
+        self.fake_s3 = self.s3_patch.start()
         os.environ["ARTIFACTS_DDB_TABLE"] = "ModelArtifacts"
 
     def tearDown(self):
         self.patch.stop()
+        self.s3_patch.stop()
 
-    def invoke(self, method: str, path: str):
+    def invoke(self, method: str, path: str, query=None):
         event = {
             "requestContext": {"http": {"method": method}},
             "rawPath": path,
+            "queryStringParameters": query,
         }
         return metadata.lambda_handler(event, None)
 
-    def test_get_artifact_metadata(self):
+    def test_get_artifact_download_metadata(self):
         resp = self.invoke("GET", "/artifacts/model/demo-model")
         body = json.loads(resp["body"])
         self.assertEqual(resp["statusCode"], 200)
-        self.assertEqual(body["model_id"], "demo-model")
+        self.assertEqual(body["metadata"]["model_id"], "demo-model")
+        self.assertEqual(body["artifacts"][0]["bucket"], "demo-bucket")
 
     def test_get_lineage(self):
         resp = self.invoke("GET", "/artifact/model/demo-model/lineage")
@@ -152,6 +163,32 @@ class MetadataLambdaTests(unittest.TestCase):
     def test_not_found(self):
         resp = self.invoke("GET", "/artifacts/model/unknown")
         self.assertEqual(resp["statusCode"], 404)
+
+    def test_inline_download(self):
+        resp = self.invoke(
+            "GET",
+            "/artifacts/model/demo-model",
+            query={"inline": "true"},
+        )
+        body = json.loads(resp["body"])
+        self.assertIn("data", body["artifacts"][0])
+
+
+class FakeS3:
+    def __init__(self):
+        self.data = {
+            ("demo-bucket", "demo/model/model.zip"): b"binary-data",
+            ("demo-bucket", "demo/model/log.json"): b"log-data",
+        }
+
+    def head_object(self, Bucket, Key):
+        return {"ContentLength": len(self.data.get((Bucket, Key), b""))}
+
+    def generate_presigned_url(self, operation, Params, ExpiresIn):
+        return f"https://mock/{Params['Bucket']}/{Params['Key']}?ttl={ExpiresIn}"
+
+    def get_object(self, Bucket, Key):
+        return {"Body": io.BytesIO(self.data.get((Bucket, Key), b""))}
 
 
 if __name__ == "__main__":
