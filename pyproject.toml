@@ -34,6 +34,7 @@ botocore = "^1.40.67"
 moto = "^5.1.16"
 hf-xet = "^1.2.0"
 typing-extensions = "^4.15.0"
+numpy = "1.26.4"
 
 
 [build-system]
