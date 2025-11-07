@@ -8,9 +8,9 @@ RUN yum install -y \
         python3-devel \
     && yum clean all
 
-COPY dependencies.txt ${LAMBDA_TASK_ROOT}/dependencies.txt
+COPY lambda-requirements.txt ${LAMBDA_TASK_ROOT}/lambda-requirements.txt
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/dependencies.txt
+    && pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/lambda-requirements.txt
 
 COPY src ${LAMBDA_TASK_ROOT}/src
 

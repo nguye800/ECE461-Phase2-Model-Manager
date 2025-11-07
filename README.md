@@ -15,7 +15,7 @@ for run test:
 
 ## Lambda Containers & Deployment
 
-- All Lambda functions (upload, download, metadata) now share the same container image defined in `dockerfiles/Dockerfile.lambda`. The entry point defaults to `upload.lambda_handler`, but the handler can be overridden per-function when configuring the Lambda in AWS.
+- All Lambda functions (upload, metadata) now share the same container image defined in `dockerfiles/Dockerfile.lambda`. The entry point defaults to `upload.lambda_handler`, but the handler can be overridden per-function when configuring the Lambda in AWS. The image installs only the runtime dependencies listed in `lambda-requirements.txt` to keep builds fast; local development can continue using the broader `dependencies.txt`.
 - The workflow `.github/workflows/deploy-lambdas.yml` builds the image once, tags it three times (`upload-latest`, `download-latest`, `metadata-latest`), and pushes the tags to ECR (`ece461/function-containers`). Uncomment the final steps if you want the workflow to call `aws lambda update-function-code` automatically after a push.
 - To hook a Lambda into API Gateway:
   1. Point the Lambda to the corresponding ECR image tag.

@@ -1,0 +1,8 @@
+typer==0.20.0
+pydantic==2.12.4
+sortedcontainers==2.4.0
+spdx-license-matcher==1.0.10
+spdx-matcher==0.1.3
+python-dotenv==1.2.1
+GitPython==3.1.45
+boto3==1.40.4
