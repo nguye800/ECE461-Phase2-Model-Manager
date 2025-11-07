@@ -8,6 +8,7 @@ toml
 spdx-license-matcher
 spdx-matcher
 dotenv
+numpy==1.26.4
 torch
 transformers
 accelerate
