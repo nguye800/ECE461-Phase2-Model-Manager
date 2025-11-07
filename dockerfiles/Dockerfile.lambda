@@ -1,6 +1,12 @@
 FROM public.ecr.aws/lambda/python:3.11
 
-RUN yum install -y git && yum clean all
+RUN yum install -y \
+        git \
+        gcc \
+        gcc-c++ \
+        make \
+        python3-devel \
+    && yum clean all
 
 COPY dependencies.txt ${LAMBDA_TASK_ROOT}/dependencies.txt
 RUN pip install --upgrade pip \
