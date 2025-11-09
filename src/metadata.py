@@ -12,12 +12,15 @@ import boto3
 from boto3.dynamodb.conditions import Key
 
 ARTIFACTS_TABLE_NAME = os.environ.get("ARTIFACTS_DDB_TABLE", "ModelArtifacts")
+ARTIFACTS_DDB_REGION = os.environ.get("ARTIFACTS_DDB_REGION")
 COST_PER_GB = float(os.environ.get("ARTIFACT_COST_PER_GB", "0.12"))
 DEFAULT_PRESIGN_TTL = int(os.environ.get("DOWNLOAD_PRESIGN_EXPIRATION", "3600"))
 DEFAULT_MODEL_BUCKET = os.environ.get("MODEL_BUCKET_NAME")
 
 
 def _dynamodb():
+    if ARTIFACTS_DDB_REGION:
+        return boto3.resource("dynamodb", region_name=ARTIFACTS_DDB_REGION)
     return boto3.resource("dynamodb")
 
 

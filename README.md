@@ -35,6 +35,7 @@ Environment variables:
 | Variable | Description |
 | --- | --- |
 | `ARTIFACTS_DDB_TABLE` | DynamoDB table that stores both artifact metadata (`sk = META`) and audit entries (`sk = AUDIT#...`). Defaults to `ModelArtifacts`. |
+| `ARTIFACTS_DDB_REGION` | (Optional) Override the DynamoDB region if the table lives in a different region than the Lambda (e.g., `us-east-1`). |
 | `ARTIFACT_COST_PER_GB` | Cost coefficient used by the `/cost` endpoint (USD per GB). Default `0.12`. |
 
 Endpoints implemented:
