@@ -1,19 +1,20 @@
 """
-Lambda entry point for searching model artifacts stored in the registry.
+Lambda entry point for searching model artifacts stored in DynamoDB.
 
 Supported routes (API Gateway compatible):
     POST /artifacts
-        Accepts a JSON body with `artifact_queries`, pagination controls, and
-        optional filters. Returns artifacts that satisfy any of the supplied
-        queries. The response header `x-next-offset` indicates how to fetch the
-        next page.
+        Searches for model artifacts matching one or more query objects. The
+        response includes `x-next-offset` (a pagination token) when additional
+        results are available.
 
     GET /artifact/byName/{name}
-        Returns every artifact that matches the provided name (case-insensitive).
+        Returns every artifact that matches the provided name (case-insensitive)
+        using the NameIndex global secondary index.
 
     POST /artifact/byRegEx
-        Accepts JSON with `pattern` and returns artifacts whose name or README
-        text matches the provided regular expression.
+        Performs a regex match over canonical names (`name_lc`) and README text.
+        Pagination uses DynamoDB's LastEvaluatedKey encoded inside the same
+        `x-next-offset` header used by `/artifacts`.
 """
 
 from __future__ import annotations
@@ -23,32 +24,30 @@ import json
 import logging
 import os
 import re
-import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Iterable, Sequence
+from decimal import Decimal
+from typing import Any, Sequence
 from urllib.parse import unquote_plus
 
+import boto3
+from boto3.dynamodb.conditions import Attr, Key
 
 LOGGER = logging.getLogger(__name__)
 
-MODEL_REGISTRY_TABLE = os.environ.get("MODEL_REGISTRY_TABLE", "model_registry")
-DB_PATH_ENV_VAR = "MODEL_REGISTRY_DB_PATH"
-DEFAULT_DB_PATH = os.environ.get(
-    DB_PATH_ENV_VAR, str(Path(__file__).resolve().parent.parent / "models.db")
-)
+DEFAULT_TABLE_NAME = os.environ.get("MODEL_REGISTRY_TABLE", "model_registry")
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
-READ_ME_CANDIDATE_COLUMNS = (
-    "readme",
-    "readme_text",
-    "readme_blob",
-    "readme_markdown",
-)
+SCAN_BATCH_SIZE = 25
 
 
 class RepositoryError(RuntimeError):
     """Raised when the backing artifact repository cannot be queried."""
+
+
+@dataclass
+class PaginationParams:
+    start_key: dict[str, Any] | None = None
+    skip: int = 0
 
 
 def lambda_handler(event: dict, context: Any) -> dict:
@@ -89,7 +88,6 @@ def _handle_post_artifacts(event: dict) -> dict:
 
     queries = payload.get("artifact_queries") or payload.get("queries") or []
     if not queries:
-        # Per spec, callers can enumerate everything with {"name": "*"}
         queries = [{"name": "*"}]
     if not isinstance(queries, list):
         return _error_response(400, "`artifact_queries` must be a list")
@@ -99,30 +97,39 @@ def _handle_post_artifacts(event: dict) -> dict:
         or _get_query_param(event, "limit")
         or _get_header(event, "x-limit")
     )
-    offset = _clamp_offset(
+    pagination = _extract_pagination_params(payload, event)
+    offset_input = (
         payload.get("offset")
         or _get_query_param(event, "offset")
         or _get_header(event, "x-offset")
     )
+    target = min(limit + pagination.skip, MAX_LIMIT + pagination.skip)
 
     repo = _get_repository()
     try:
-        artifacts, has_more = repo.search(queries, limit, offset)
+        artifacts, next_key = repo.search(queries, target, pagination.start_key)
     except RepositoryError as exc:
         LOGGER.error("Failed to execute artifact search: %s", exc)
         return _error_response(500, "Unable to execute search")
 
+    artifacts = artifacts[pagination.skip : pagination.skip + limit]
+    plain_artifacts = [_dynamo_to_plain(a) for a in artifacts]
+
     headers = {}
-    if has_more:
-        headers["x-next-offset"] = str(offset + limit)
+    if next_key:
+        headers["x-next-offset"] = _encode_pagination_token(next_key)
+
+    normalized_offset = pagination.skip
+    if normalized_offset == 0 and isinstance(offset_input, str) and offset_input.strip():
+        normalized_offset = offset_input
 
     body = {
-        "artifacts": artifacts,
+        "artifacts": plain_artifacts,
         "page": {
-            "offset": offset,
+            "offset": normalized_offset,
             "limit": limit,
-            "returned": len(artifacts),
-            "has_more": has_more,
+            "returned": len(plain_artifacts),
+            "has_more": bool(next_key),
         },
     }
     return _success_response(body, headers=headers)
@@ -143,7 +150,7 @@ def _handle_get_artifact_by_name(event: dict, path: str) -> dict:
     if not records:
         return _error_response(404, f"No artifact found with name '{name}'")
 
-    return _success_response({"artifacts": records})
+    return _success_response({"artifacts": [_dynamo_to_plain(r) for r in records]})
 
 
 def _handle_post_regex(event: dict) -> dict:
@@ -166,33 +173,46 @@ def _handle_post_regex(event: dict) -> dict:
         or _get_query_param(event, "limit")
         or _get_header(event, "x-limit")
     )
-    offset = _clamp_offset(
+    pagination = _extract_pagination_params(payload, event)
+    offset_input = (
         payload.get("offset")
         or _get_query_param(event, "offset")
         or _get_header(event, "x-offset")
     )
+    target = min(limit + pagination.skip, MAX_LIMIT + pagination.skip)
 
     repo = _get_repository()
     try:
-        artifacts, has_more = repo.regex_search(compiled, limit, offset)
+        artifacts, next_key = repo.regex_search(compiled, target, pagination.start_key)
     except RepositoryError as exc:
         LOGGER.error("Failed to run regex search: %s", exc)
         return _error_response(500, "Unable to execute regex search")
 
+    artifacts = artifacts[pagination.skip : pagination.skip + limit]
+    plain_artifacts = [_dynamo_to_plain(a) for a in artifacts]
+
     headers = {}
-    if has_more:
-        headers["x-next-offset"] = str(offset + limit)
+    if next_key:
+        headers["x-next-offset"] = _encode_pagination_token(next_key)
+
+    normalized_offset = pagination.skip
+    if normalized_offset == 0 and isinstance(offset_input, str) and offset_input.strip():
+        normalized_offset = offset_input
 
     body = {
-        "artifacts": artifacts,
+        "artifacts": plain_artifacts,
         "page": {
-            "offset": offset,
+            "offset": normalized_offset,
             "limit": limit,
-            "returned": len(artifacts),
-            "has_more": has_more,
+            "returned": len(plain_artifacts),
+            "has_more": bool(next_key),
         },
     }
     return _success_response(body, headers=headers)
+
+
+# -----------------------------------------------------------------------------
+# Helper utilities
 
 
 def _parse_json_body(event: dict) -> dict:
@@ -258,12 +278,48 @@ def _clamp_limit(candidate: Any) -> int:
     return max(1, min(value, MAX_LIMIT))
 
 
-def _clamp_offset(candidate: Any) -> int:
+def _extract_pagination_params(payload: dict, event: dict) -> PaginationParams:
+    raw = (
+        payload.get("offset")
+        or _get_query_param(event, "offset")
+        or _get_header(event, "x-offset")
+    )
+    if raw is None:
+        return PaginationParams()
+    if isinstance(raw, (int, float)):
+        return PaginationParams(skip=max(int(raw), 0))
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return PaginationParams()
+        if raw.isdigit():
+            return PaginationParams(skip=max(int(raw), 0))
+        try:
+            return PaginationParams(start_key=_decode_pagination_token(raw))
+        except ValueError:
+            LOGGER.debug("Ignoring invalid pagination token")
+            return PaginationParams()
     try:
-        value = int(candidate)
+        return PaginationParams(skip=max(int(raw), 0))
     except (TypeError, ValueError):
-        return 0
-    return max(0, value)
+        return PaginationParams()
+
+
+def _decode_pagination_token(token: str) -> dict[str, Any]:
+    padding = "=" * (-len(token) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(token + padding).decode("utf-8")
+        data = json.loads(decoded)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid pagination token") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Invalid pagination token")
+    return data
+
+
+def _encode_pagination_token(key: dict[str, Any]) -> str:
+    payload = json.dumps(key)
+    return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("utf-8").rstrip("=")
 
 
 def _get_query_param(event: dict, key: str) -> str | None:
@@ -302,241 +358,225 @@ def _error_response(status_code: int, message: str) -> dict:
     }
 
 
+def _dynamo_to_plain(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        if value % 1 == 0:
+            return int(value)
+        return float(value)
+    if isinstance(value, list):
+        return [_dynamo_to_plain(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _dynamo_to_plain(v) for k, v in value.items()}
+    return value
+
+
+# -----------------------------------------------------------------------------
+# Repository implementation
+
 _REPOSITORY: ArtifactRepository | None = None
 
 
-def _get_repository() -> ArtifactRepository:
+def _get_repository() -> "ArtifactRepository":
     global _REPOSITORY
     if _REPOSITORY is None:
-        _REPOSITORY = ArtifactRepository(
-            os.environ.get(DB_PATH_ENV_VAR, DEFAULT_DB_PATH),
-            MODEL_REGISTRY_TABLE,
-        )
+        table_name = os.environ.get("MODEL_REGISTRY_TABLE", DEFAULT_TABLE_NAME)
+        _REPOSITORY = ArtifactRepository(table_name)
     return _REPOSITORY
 
 
-@dataclass
 class ArtifactRepository:
-    db_path: str
-    table_name: str = MODEL_REGISTRY_TABLE
+    def __init__(self, table_name: str):
+        dynamodb = boto3.resource("dynamodb")
+        self.table = dynamodb.Table(table_name)
 
     def search(
         self,
         queries: Sequence[dict],
-        limit: int,
-        offset: int,
-    ) -> tuple[list[dict], bool]:
-        where_sql, params = self._compile_where_clause(queries)
-        limit_for_fetch = min(limit, MAX_LIMIT) + 1
-        sql = f"""
-            SELECT *
-            FROM {self.table_name}
-            WHERE {where_sql}
-            ORDER BY repo_id COLLATE NOCASE, model_id
-            LIMIT ?
-            OFFSET ?
-        """
-        params.extend([limit_for_fetch, offset])
-        rows = self._fetch_rows(sql, params)
-        has_more = len(rows) > limit
-        artifacts = [_normalize_row(row) for row in rows[:limit]]
-        return artifacts, has_more
+        total_needed: int,
+        start_key: dict[str, Any] | None = None,
+    ) -> tuple[list[dict], dict[str, Any] | None]:
+        normalized_queries = queries or [{"name": "*"}]
+        predicate = lambda item: _matches_any_query(item, normalized_queries)
+        return self._scan_models(total_needed, start_key, predicate)
 
     def fetch_by_name(self, name: str) -> list[dict]:
-        sql = f"""
-            SELECT *
-            FROM {self.table_name}
-            WHERE LOWER(repo_id) = ?
-            ORDER BY model_id
-        """
-        rows = self._fetch_rows(sql, [name.lower()])
-        return [_normalize_row(row) for row in rows]
+        try:
+            response = self.table.query(
+                IndexName="NameIndex",
+                KeyConditionExpression=Key("name_lc").eq(name.lower()),
+                FilterExpression=Attr("type").eq("MODEL") & Attr("sk").eq("META"),
+            )
+        except Exception as exc:  # pragma: no cover - boto3 specific failure path
+            raise RepositoryError(str(exc)) from exc
+        return response.get("Items", [])
 
     def regex_search(
         self,
         pattern: re.Pattern,
-        limit: int,
-        offset: int,
-    ) -> tuple[list[dict], bool]:
-        sql = f"SELECT * FROM {self.table_name}"
-        rows = self._fetch_rows(sql, [])
-        matches = []
-        for row in rows:
-            haystacks = [row.get("repo_id") or ""]
-            readme_content = _extract_readme(row)
-            if readme_content:
-                haystacks.append(readme_content)
-
-            if any(pattern.search(text) for text in haystacks if text):
-                matches.append(_normalize_row(row))
-
-        limited = matches[offset : offset + limit]
-        has_more = len(matches) > offset + len(limited)
-        return limited, has_more
-
-    def _compile_where_clause(
-        self, queries: Sequence[dict]
-    ) -> tuple[str, list[Any]]:
-        if not queries:
-            return "1=1", []
-
-        clauses: list[str] = []
-        params: list[Any] = []
-        for query in queries:
-            query = query or {}
-            filters = query.get("filters") or {}
-            merged = {**query, **filters}
-            conds: list[str] = []
-            cond_params: list[Any] = []
-
-            name = merged.get("name")
-            if name and name != "*":
-                conds.append("LOWER(repo_id) LIKE ?")
-                cond_params.append(f"%{str(name).lower()}%")
-
-            license_filter = merged.get("license")
-            if license_filter:
-                conds.append("LOWER(license) = ?")
-                cond_params.append(str(license_filter).lower())
-
-            dataset_name = merged.get("dataset_name") or merged.get("dataset")
-            if dataset_name:
-                conds.append("LOWER(dataset_name) LIKE ?")
-                cond_params.append(f"%{str(dataset_name).lower()}%")
-
-            dataset_link = merged.get("dataset_link")
-            if dataset_link:
-                conds.append("LOWER(dataset_link) LIKE ?")
-                cond_params.append(f"%{str(dataset_link).lower()}%")
-
-            base_model = merged.get("base_models_modelID") or merged.get("base_model")
-            if base_model:
-                conds.append("LOWER(base_models_modelID) LIKE ?")
-                cond_params.append(f"%{str(base_model).lower()}%")
-
-            github_link = merged.get("github_link")
-            if github_link:
-                conds.append("LOWER(github_link) LIKE ?")
-                cond_params.append(f"%{str(github_link).lower()}%")
-
-            _append_range_filter(
-                merged,
-                "likes",
-                "min_likes",
-                "max_likes",
-                conds,
-                cond_params,
-            )
-            _append_range_filter(
-                merged,
-                "downloads",
-                "min_downloads",
-                "max_downloads",
-                conds,
-                cond_params,
-            )
-            _append_range_filter(
-                merged,
-                "parameter_number",
-                "min_parameter_number",
-                "max_parameter_number",
-                conds,
-                cond_params,
-            )
-            _append_range_filter(
-                merged,
-                "gb_size_of_model",
-                "min_model_gb",
-                "max_model_gb",
-                conds,
-                cond_params,
+        total_needed: int,
+        start_key: dict[str, Any] | None = None,
+    ) -> tuple[list[dict], dict[str, Any] | None]:
+        def predicate(item: dict) -> bool:
+            haystacks = [
+                item.get("name_lc") or "",
+                item.get("name") or "",
+                item.get("readme_text") or "",
+            ]
+            return any(
+                isinstance(text, str) and pattern.search(text)
+                for text in haystacks
             )
 
-            if conds:
-                clauses.append(f"({' AND '.join(conds)})")
-                params.extend(cond_params)
-            else:
-                clauses.append("(1=1)")
+        return self._scan_models(total_needed, start_key, predicate)
 
-        return " OR ".join(clauses), params
-
-    def _fetch_rows(self, sql: str, params: Sequence[Any]) -> list[dict]:
+    def _scan_models(
+        self,
+        total_needed: int,
+        start_key: dict[str, Any] | None,
+        predicate,
+    ) -> tuple[list[dict], dict[str, Any] | None]:
+        matched: list[dict] = []
+        exclusive_start = start_key
+        next_key: dict[str, Any] | None = None
         try:
-            with sqlite3.connect(self.db_path, check_same_thread=False) as conn:
-                conn.row_factory = sqlite3.Row
-                cur = conn.execute(sql, params)
-                rows = cur.fetchall()
-                return [dict(row) for row in rows]
-        except sqlite3.Error as exc:
+            while len(matched) < total_needed:
+                scan_limit = max(total_needed - len(matched), SCAN_BATCH_SIZE)
+                scan_kwargs: dict[str, Any] = {
+                    "FilterExpression": Attr("type").eq("MODEL") & Attr("sk").eq("META"),
+                    "Limit": scan_limit,
+                }
+                if exclusive_start:
+                    scan_kwargs["ExclusiveStartKey"] = exclusive_start
+
+                response = self.table.scan(**scan_kwargs)
+                items = response.get("Items", [])
+                last_consumed_key: dict[str, Any] | None = None
+                for item in items:
+                    if "pk" in item and "sk" in item:
+                        last_consumed_key = {"pk": item["pk"], "sk": item["sk"]}
+                    if predicate(item):
+                        matched.append(item)
+                        if len(matched) >= total_needed:
+                            next_key = response.get("LastEvaluatedKey") or last_consumed_key
+                            break
+
+                if len(matched) >= total_needed:
+                    break
+
+                exclusive_start = response.get("LastEvaluatedKey")
+                if not exclusive_start:
+                    next_key = None
+                    break
+
+            else:
+                next_key = response.get("LastEvaluatedKey")
+        except Exception as exc:  # pragma: no cover - boto3 specific failure path
             raise RepositoryError(str(exc)) from exc
 
-
-def _append_range_filter(
-    merged: dict,
-    column_name: str,
-    min_key: str,
-    max_key: str,
-    conds: list[str],
-    params: list[Any],
-):
-    min_value = _coerce_number(merged.get(min_key))
-    if min_value is not None:
-        conds.append(f"{column_name} >= ?")
-        params.append(min_value)
-
-    max_value = _coerce_number(merged.get(max_key))
-    if max_value is not None:
-        conds.append(f"{column_name} <= ?")
-        params.append(max_value)
-
-    exact_value = merged.get(column_name)
-    if exact_value is not None and min_value is None and max_value is None:
-        coerced = _coerce_number(exact_value)
-        if coerced is not None:
-            conds.append(f"{column_name} = ?")
-            params.append(coerced)
+        return matched, next_key
 
 
-def _coerce_number(value: Any) -> float | int | None:
+def _matches_any_query(item: dict, queries: Sequence[dict]) -> bool:
+    return any(_matches_single_query(item, query or {}) for query in queries)
+
+
+def _matches_single_query(item: dict, query: dict) -> bool:
+    if item.get("type") != "MODEL" or item.get("sk") != "META":
+        return False
+
+    name_filter = str(query.get("name") or "*").strip()
+    if name_filter not in ("", "*"):
+        needle = name_filter.lower()
+        haystack = (item.get("name_lc") or "").lower()
+        if needle not in haystack:
+            return False
+
+    filters = query.get("filters") or {}
+    license_filter = filters.get("license") or query.get("license")
+    if license_filter:
+        if (item.get("license") or "").lower() != str(license_filter).lower():
+            return False
+
+    average_filter = filters.get("metrics.average")
+    if average_filter is not None:
+        if not _value_meets_numeric_filter(
+            _decimal_to_float(item.get("metrics", {}).get("average")),
+            average_filter,
+        ):
+            return False
+
+    base_model_filter = (
+        filters.get("base_models[].model_id")
+        or filters.get("base_models.model_id")
+        or filters.get("base_model_id")
+    )
+    if base_model_filter is not None:
+        if not _base_models_match(item.get("base_models") or [], base_model_filter):
+            return False
+
+    eligibility_filter = filters.get("eligibility.minimum_evidence_met")
+    if eligibility_filter is not None:
+        expected = bool(eligibility_filter)
+        actual = bool(item.get("eligibility", {}).get("minimum_evidence_met"))
+        if expected != actual:
+            return False
+
+    return True
+
+
+def _base_models_match(base_models: list[dict], needle: Any) -> bool:
+    if not base_models:
+        return False
+    if isinstance(needle, (list, tuple, set)):
+        targets = {str(v).lower() for v in needle}
+    else:
+        targets = {str(needle).lower()}
+    for entry in base_models:
+        model_id = str(entry.get("model_id") or entry.get("modelId") or "").lower()
+        if model_id and model_id in targets:
+            return True
+    return False
+
+
+def _value_meets_numeric_filter(value: Any, expected: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(expected, dict):
+        min_value = _decimal_to_float(
+            expected.get("min")
+            or expected.get("gte")
+            or expected.get("minimum")
+        )
+        max_value = _decimal_to_float(
+            expected.get("max")
+            or expected.get("lte")
+            or expected.get("maximum")
+        )
+    else:
+        parsed = _decimal_to_float(expected)
+        min_value = parsed
+        max_value = parsed
+
+    if min_value is not None and value < min_value:
+        return False
+    if max_value is not None and value > max_value:
+        return False
+    return True
+
+
+def _decimal_to_float(value: Any) -> float | int | None:
     if value is None:
         return None
+    if isinstance(value, Decimal):
+        if value % 1 == 0:
+            return int(value)
+        return float(value)
+    if isinstance(value, (int, float)):
+        return value
     try:
-        if isinstance(value, float):
-            return value
-        if isinstance(value, int):
-            return value
-        if "." in str(value):
-            return float(value)
-        return int(value)
+        return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _normalize_row(row: dict) -> dict:
-    normalized = dict(row)
-    rename_map = {
-        "repo_id": "name",
-        "gb_size_of_model": "model_size_gb",
-        "parameter_number": "parameter_count",
-    }
-    for src, dest in rename_map.items():
-        if src in normalized:
-            normalized[dest] = normalized.pop(src)
-
-    readme_value = _extract_readme(normalized)
-    if readme_value is not None:
-        normalized["readme_text"] = readme_value
-    return normalized
-
-
-def _extract_readme(row: dict) -> str | None:
-    for column in READ_ME_CANDIDATE_COLUMNS:
-        if column in row and row[column]:
-            value = row[column]
-            if isinstance(value, bytes):
-                return value.decode("utf-8", errors="ignore")
-            return str(value)
-    return None
 
 
 # Retain backwards-compatible name in case other modules import this symbol.
