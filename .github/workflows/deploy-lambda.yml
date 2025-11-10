@@ -16,7 +16,11 @@ env:
   RATE_LAMBDA_FUNCTION_NAME: Rate
   RATE_ECR_REPOSITORY: ece461/function-containers
   RATE_DOCKERFILE: dockerfiles/dockerfile.rate
-  RATE_IMAGE_TAG: latest
+  RATE_IMAGE_TAG: rate
+  ENQUEUE_LAMBDA_FUNCTION_NAME: enqueue_rate
+  ENQUEUE_ECR_REPOSITORY: ece461/function-containers
+  ENQUEUE_DOCKERFILE: dockerfiles/dockerfile.enqueue_rate
+  ENQUEUE_IMAGE_TAG: enqueue-rate
 
 jobs:
   deploy:
@@ -60,6 +64,14 @@ jobs:
             -t $ECR_REGISTRY/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }} .
           docker push $ECR_REGISTRY/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
 
+      - name: Build, tag, and push enqueue-rate Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.ENQUEUE_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+
       # Uncomment after the Lambda exists and you want automatic deploys
       - name: Update rate Lambda function to new image
         run: |
@@ -67,7 +79,14 @@ jobs:
             --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }} \
             --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
 
+      # - name: Update enqueue_rate Lambda function to new image
+      #   run: |
+      #     aws lambda update-function-code \
+      #       --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }} \
+      #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+
       # Optional: uncomment once the Lambda is live
       - name: Confirm deployment
         run: |
           aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
+      # aws lambda get-function --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }}
