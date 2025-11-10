@@ -17,7 +17,7 @@ env:
   RATE_ECR_REPOSITORY: ece461/function-containers
   RATE_DOCKERFILE: dockerfiles/dockerfile.rate
   RATE_IMAGE_TAG: rate
-  ENQUEUE_LAMBDA_FUNCTION_NAME: enqueue_rate
+  ENQUEUE_LAMBDA_FUNCTION_NAME: Enqueue-Rate
   ENQUEUE_ECR_REPOSITORY: ece461/function-containers
   ENQUEUE_DOCKERFILE: dockerfiles/dockerfile.enqueue_rate
   ENQUEUE_IMAGE_TAG: enqueue-rate
