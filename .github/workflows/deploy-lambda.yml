@@ -61,13 +61,13 @@ jobs:
           docker push $ECR_REGISTRY/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
 
       # Uncomment after the Lambda exists and you want automatic deploys
-      # - name: Update rate Lambda function to new image
-      #   run: |
-      #     aws lambda update-function-code \
-      #       --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }} \
-      #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
+      - name: Update rate Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
 
       # Optional: uncomment once the Lambda is live
-      # - name: Confirm deployment
-      #   run: |
-      #     aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
+      - name: Confirm deployment
+        run: |
+          aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
