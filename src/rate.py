@@ -45,7 +45,7 @@ OPENAPI_METRIC_FIELDS: Tuple[str, ...] = (
     "bus_factor",
     "performance_claims",
     "license",
-    "dataset_and_code_score",
+    "dataset_and_code",
     "dataset_quality",
     "code_quality",
     "reproducibility",

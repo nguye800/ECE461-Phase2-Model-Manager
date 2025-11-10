@@ -80,13 +80,13 @@ jobs:
             --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
 
       # - name: Update enqueue_rate Lambda function to new image
-      #   run: |
-      #     aws lambda update-function-code \
-      #       --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }} \
-      #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
 
       # Optional: uncomment once the Lambda is live
       - name: Confirm deployment
         run: |
           aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
-      # aws lambda get-function --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }}

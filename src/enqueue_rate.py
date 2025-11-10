@@ -1,4 +1,4 @@
-"""Lightweight Lambda entry point that validates a rate request and enqueues it for asynchronous processing."""
+"""HTTP Lambda entry point for retrieving model ratings from DynamoDB."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ import base64
 import json
 import logging
 import os
-import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import boto3
 from botocore.exceptions import ClientError
+
+from rate import _build_openapi_response
 
 LOG_LEVEL = os.getenv("RATE_LOG_LEVEL", "INFO").upper()
 logger = logging.getLogger(__name__)
@@ -19,12 +19,11 @@ if not logger.handlers:
     logger.addHandler(logging.StreamHandler())
 logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 
-_SQS_CLIENT = boto3.client("sqs")
-_QUEUE_ENV = "RATE_JOBS_QUEUE_URL"
+dynamo = boto3.resource("dynamodb")
 
 
 class EnqueueException(Exception):
-    """Raised when the request cannot be accepted."""
+    """Raised when the request cannot be fulfilled."""
 
     def __init__(self, status_code: int, message: str):
         super().__init__(message)
@@ -33,61 +32,61 @@ class EnqueueException(Exception):
 
 
 def handler(event: Any, context: Any) -> Dict[str, Any]:
-    """HTTP Lambda entrypoint that enqueues rate jobs."""
+    """HTTP Lambda entrypoint that returns the latest model rating."""
     event_dict = _coerce_event(event)
 
     try:
-        # _require_auth(event_dict)
+        _require_auth(event_dict)
         model_id = _extract_model_id(event_dict)
     except EnqueueException as exc:
         return _json_response(exc.status_code, {"message": exc.message})
 
-    queue_url = os.getenv(_QUEUE_ENV)
-    if not queue_url:
-        logger.error("%s environment variable must be set", _QUEUE_ENV)
+    table_name = os.getenv("MODELS_TABLE")
+    if not table_name:
+        logger.error("Environment variable MODELS_TABLE is required.")
         return _json_response(
-            500, {"message": f"configuration error: {_QUEUE_ENV} not set"}
+            500, {"message": "configuration error: MODELS_TABLE not set"}
         )
 
-    job_id = str(uuid.uuid4())
-    now_iso = datetime.now(timezone.utc).isoformat()
-    request_ctx = event_dict.get("requestContext") or {}
-    payload = {
-        "job_id": job_id,
-        "model_id": model_id,
-        "requested_at": now_iso,
-        "request_context": {
-            "request_id": request_ctx.get("requestId"),
-            "connection_id": request_ctx.get("connectionId"),
-            "stage": request_ctx.get("stage"),
-            "domain_name": request_ctx.get("domainName"),
-            "api_id": request_ctx.get("apiId"),
-        },
-        "pathParameters": event_dict.get("pathParameters"),
-        "queryStringParameters": event_dict.get("queryStringParameters"),
-        "headers": event_dict.get("headers"),
-        "source": "enqueue_rate",
-    }
+    table = dynamo.Table(table_name)
 
     try:
-        _SQS_CLIENT.send_message(
-            QueueUrl=queue_url,
-            MessageBody=json.dumps(payload),
-        )
+        response = table.get_item(Key=_build_dynamo_key(model_id))
     except ClientError as exc:  # pragma: no cover - network dependent
-        logger.exception("Failed to enqueue job %s", job_id)
-        return _json_response(502, {"message": "failed to enqueue request"})
+        logger.exception("DynamoDB get_item failed")
+        return _json_response(500, {"message": "failed to access metadata"})
 
-    logger.info("Enqueued job %s for model %s", job_id, model_id)
-    return _json_response(
-        202,
-        {
-            "job_id": job_id,
-            "model_id": model_id,
-            "status": "ENQUEUED",
-            "requested_at": now_iso,
-        },
+    item = response.get("Item")
+    if not item:
+        return _json_response(404, {"message": f"model {model_id} not found"})
+
+    scoring = item.get("scoring", {})
+    eligibility = item.get("eligibility", {})
+    metrics_blob = item.get("metrics")
+
+    if scoring.get("status") != "COMPLETED":
+        reason = eligibility.get("reason") or scoring.get("status") or "rating pending"
+        return _json_response(500, {"message": reason})
+
+    if eligibility.get("minimum_evidence_met") is False:
+        reason = eligibility.get("reason") or "insufficient evidence coverage"
+        return _json_response(500, {"message": reason})
+
+    if not metrics_blob:
+        return _json_response(500, {"message": "metrics unavailable"})
+
+    breakdown = metrics_blob.get("breakdown", {})
+    net_score = float(metrics_blob.get("average", 0.0))
+    net_score_latency = int(scoring.get("net_score_latency", 0))
+
+    response_payload = _build_openapi_response(
+        item=item,
+        model_id=model_id,
+        net_score=net_score,
+        net_score_latency=net_score_latency,
+        breakdown=breakdown,
     )
+    return _json_response(200, response_payload)
 
 
 def _coerce_event(event: Any) -> Dict[str, Any]:
@@ -158,4 +157,15 @@ def _json_response(status_code: int, payload: Dict[str, Any]) -> Dict[str, Any]:
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(payload),
+    }
+
+
+def _build_dynamo_key(model_id: str) -> Dict[str, str]:
+    pk_field = os.getenv("RATE_PK_FIELD", "pk")
+    sk_field = os.getenv("RATE_SK_FIELD", "sk")
+    pk_prefix = os.getenv("RATE_PK_PREFIX", "MODEL#")
+    sk_value = os.getenv("RATE_META_SK", "META")
+    return {
+        pk_field: f"{pk_prefix}{model_id}",
+        sk_field: sk_value,
     }

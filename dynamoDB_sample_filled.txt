@@ -1,0 +1,114 @@
+# DynamoDB item (put_item) - fully scored sample
+{
+  "pk": { "S": "MODEL#01KP9ZQJJXQ8J3KAF6VEPJ7YKW" },
+  "sk": { "S": "META" },
+  "type": { "S": "MODEL" },
+  "model_id": { "S": "01KP9ZQJJXQ8J3KAF6VEPJ7YKW" },
+  "name": { "S": "facebook/bart-large-cnn" },
+  "name_lc": { "S": "facebook/bart-large-cnn" },
+  "model_url": { "S": "https://huggingface.co/facebook/bart-large-cnn" },
+
+  "base_models": {
+    "L": [
+      {
+        "M": {
+          "model_id": { "S": "01KPBASEMODEL00000000000001" },
+          "model_url": { "S": "https://huggingface.co/facebook/bart-large" },
+          "relation": { "S": "derived_from" },
+          "added_at": { "S": "2024-05-10T14:22:00Z" }
+        }
+      }
+    ]
+  },
+
+  "dataset": {
+    "M": {
+      "url": { "S": "https://huggingface.co/datasets/cnn_dailymail" },
+      "version": { "N": "3" },
+      "updated_at": { "S": "2025-05-04T18:11:47Z" }
+    }
+  },
+
+  "codebase": {
+    "M": {
+      "url": { "S": "https://github.com/pytorch/fairseq" },
+      "version": { "N": "121" },
+      "updated_at": { "S": "2025-05-04T18:11:47Z" }
+    }
+  },
+
+  "assets": {
+    "M": {
+      "model_zip_key": { "S": "models/01KP9ZQJJXQ8J3KAF6VEPJ7YKW/artifacts/bart-large-cnn.tar.gz" },
+      "model_zip_sha256": { "S": "d8a0448c6e9a2e71d9a452e460caee614e5cd2235da6c04a600a4e8f23cf45f1" }
+    }
+  },
+
+  "metrics": {
+    "M": {
+      "average": { "N": "0.82" },
+      "evidence_coverage": { "N": "0.92" },
+      "breakdown": {
+        "M": {
+          "ramp_up_time": { "M": { "value": { "N": "0.76" }, "available": { "BOOL": true }, "latency_ms": { "N": "1840" } } },
+          "bus_factor": { "M": { "value": { "N": "0.81" }, "available": { "BOOL": true }, "latency_ms": { "N": "640" } } },
+          "license": { "M": { "value": { "N": "1.0" }, "available": { "BOOL": true }, "latency_ms": { "N": "120" } } },
+          "size_score": { "M": { "value": { "N": "0.52" }, "available": { "BOOL": true }, "latency_ms": { "N": "210" }, "details": { "M": { "raspberry_pi": { "N": "0.15" }, "desktop_pc": { "N": "0.89" } } } } },
+          "dataset_and_code": { "M": { "value": { "N": "0.78" }, "available": { "BOOL": true }, "latency_ms": { "N": "890" } } },
+          "dataset_quality": { "M": { "value": { "N": "0.84" }, "available": { "BOOL": true }, "latency_ms": { "N": "450" } } },
+          "code_quality": { "M": { "value": { "N": "0.73" }, "available": { "BOOL": true }, "latency_ms": { "N": "1320" } } },
+          "performance_claims": { "M": { "value": { "N": "0.67" }, "available": { "BOOL": true }, "latency_ms": { "N": "5600" } } },
+          "reproducibility": { "M": { "value": { "N": "0.71" }, "available": { "BOOL": true }, "latency_ms": { "N": "2480" } } },
+          "reviewedness": { "M": { "value": { "N": "0.9" }, "available": { "BOOL": true }, "latency_ms": { "N": "820" } } },
+          "tree_score": { "M": { "value": { "N": "0.66" }, "available": { "BOOL": true }, "latency_ms": { "N": "305" } } }
+        }
+      }
+    }
+  },
+
+  "scoring": {
+    "M": {
+      "status": { "S": "COMPLETED" },
+      "last_scored_at": { "S": "2025-11-09T05:12:33Z" },
+      "score_version": { "S": "v1" },
+      "scorer_build": { "S": "build-2025.11.09" },
+      "net_score_latency": { "N": "7420" }
+    }
+  },
+
+  "eligibility": {
+    "M": {
+      "minimum_evidence_met": { "BOOL": true },
+      "reason": { "S": "All metrics computed successfully." }
+    }
+  },
+
+  "approval": {
+    "M": {
+      "visible": { "BOOL": true },
+      "status": { "S": "APPROVED" },
+      "reason": { "S": "Meets publication criteria" }
+    }
+  },
+
+  "created_at": { "S": "2025-05-04T18:11:47Z" },
+  "updated_at": { "S": "2025-11-09T05:12:33Z" }
+}
+
+
+---
+
+# S3 manifest (what to upload)
+{
+  "bucket": "mf-registry-dev-us-east-1",
+  "region": "us-east-1",
+  "prefix": "models/01KP9ZQJJXQ8J3KAF6VEPJ7YKW/",
+  "objects": [
+    {
+      "key": "models/01KP9ZQJJXQ8J3KAF6VEPJ7YKW/artifacts/bart-large-cnn.tar.gz",
+      "purpose": "model_weights_tar",
+      "sha256": "d8a0448c6e9a2e71d9a452e460caee614e5cd2235da6c04a600a4e8f23cf45f1",
+      "content_type": "application/gzip"
+    }
+  ]
+}
