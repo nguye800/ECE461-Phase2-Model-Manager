@@ -15,7 +15,7 @@ env:
   AWS_REGION: us-east-2
   SECONDARY_AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: 965919626283
-  ECR_REPOSITORY: route-lambda-repo
+  ECR_REPOSITORY: ece461/function-containers
   LAMBDA_DOCKERFILE: dockerfiles/Dockerfile.lambda
   BASE_IMAGE_TAG: artifacts-base-latest
   UPLOAD_IMAGE_TAG: upload-latest
