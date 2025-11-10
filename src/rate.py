@@ -279,16 +279,12 @@ def _extract_model_id(event: Dict[str, Any]) -> str:
 
 
 def _build_metric_specs() -> List[MetricSpec]:
-    ramp_half_minutes = float(os.getenv("RAMP_UP_HALF_SCORE_MINUTES", "1.0"))
-    ramp_device = os.getenv("RAMP_UP_DEVICE", "cpu")
-
     return [
         MetricSpec(
             name="ramp_up_time",
-            factory=lambda: RampUpMetric(ramp_half_minutes, ramp_device),
+            factory=RampUpMetric,
             priority=4,
             required_urls={"model"},
-            requires_local={"model"},
         ),
         MetricSpec(
             name="bus_factor",

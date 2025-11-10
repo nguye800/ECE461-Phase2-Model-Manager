@@ -108,7 +108,7 @@ def parse_url_file(url_file: Path) -> List[ModelURLs]:
 def stage_metrics(config: ConfigContract):
     stager = MetricStager(config)
 
-    stager.attach_metric(RampUpMetric(1.0, "cpu"), 4)
+    stager.attach_metric(RampUpMetric(), 4)
     stager.attach_metric(BusFactorMetric(), 2)
     stager.attach_metric(PerformanceClaimsMetric(), 2)
     stager.attach_metric(LicenseMetric(), 1)
