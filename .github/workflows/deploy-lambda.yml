@@ -79,7 +79,7 @@ jobs:
             --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }} \
             --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
 
-      # - name: Update enqueue_rate Lambda function to new image
+      - name: Update enqueue_rate Lambda function to new image
         run: |
           aws lambda update-function-code \
             --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }} \
