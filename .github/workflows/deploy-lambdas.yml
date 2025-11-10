@@ -38,6 +38,18 @@ jobs:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Ensure primary ECR repository exists
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+        run: |
+          aws ecr describe-repositories \
+            --region "${AWS_REGION}" \
+            --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 || \
+          aws ecr create-repository \
+            --region "${AWS_REGION}" \
+            --repository-name "${ECR_REPOSITORY}"
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -66,6 +78,12 @@ jobs:
           METADATA_IMAGE_TAG: ${{ env.METADATA_IMAGE_TAG }}
         run: |
           SECONDARY_REGISTRY=${AWS_ACCOUNT_ID}.dkr.ecr.${SECONDARY_REGION}.amazonaws.com
+          aws ecr describe-repositories \
+            --region "${SECONDARY_REGION}" \
+            --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 || \
+          aws ecr create-repository \
+            --region "${SECONDARY_REGION}" \
+            --repository-name "${ECR_REPOSITORY}"
           aws ecr get-login-password --region ${SECONDARY_REGION} | docker login --username AWS --password-stdin ${SECONDARY_REGISTRY}
           docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG} ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG}
           docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG} ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG}
