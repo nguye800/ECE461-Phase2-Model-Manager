@@ -13,6 +13,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-2
+  SECONDARY_AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: 965919626283
   ECR_REPOSITORY: route-lambda-repo
   LAMBDA_DOCKERFILE: dockerfiles/Dockerfile.lambda
@@ -54,6 +55,24 @@ jobs:
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }}
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
+
+      - name: Promote images to secondary region
+        env:
+          SECONDARY_REGION: ${{ env.SECONDARY_AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          BASE_IMAGE_TAG: ${{ env.BASE_IMAGE_TAG }}
+          UPLOAD_IMAGE_TAG: ${{ env.UPLOAD_IMAGE_TAG }}
+          METADATA_IMAGE_TAG: ${{ env.METADATA_IMAGE_TAG }}
+        run: |
+          SECONDARY_REGISTRY=${AWS_ACCOUNT_ID}.dkr.ecr.${SECONDARY_REGION}.amazonaws.com
+          aws ecr get-login-password --region ${SECONDARY_REGION} | docker login --username AWS --password-stdin ${SECONDARY_REGISTRY}
+          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG} ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG}
+          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG} ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG}
+          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${METADATA_IMAGE_TAG} ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${METADATA_IMAGE_TAG}
+          docker push ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG}
+          docker push ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG}
+          docker push ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${METADATA_IMAGE_TAG}
 
       # Uncomment once the Upload Lambda exists and you want automatic deployments
       # - name: Update upload Lambda image
