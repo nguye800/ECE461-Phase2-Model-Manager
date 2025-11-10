@@ -1,5 +1,5 @@
-FROM public.ecr.aws/lambda/python:3.13
-RUN dnf install -y git && dnf clean all
+FROM public.ecr.aws/lambda/python:3.11
+RUN yum install -y git && yum clean all
 COPY dependencies.txt ${LAMBDA_TASK_ROOT}/dependencies.txt
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/dependencies.txt
