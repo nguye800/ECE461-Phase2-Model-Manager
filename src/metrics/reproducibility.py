@@ -10,7 +10,7 @@ import boto3, os, json, re, tempfile, subprocess, sys
 from dotenv import load_dotenv
 
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-sonnet-20240229-v1:0")
 
 brt = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 
