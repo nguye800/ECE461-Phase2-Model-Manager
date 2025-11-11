@@ -116,6 +116,11 @@ class TestRampUpMetricInternals(unittest.TestCase):
         score = self.metric._invoke_bedrock("prompt")
         self.assertEqual(score, 0.3)
 
+    def test_invoke_bedrock_without_client(self):
+        self.metric.bedrock_client = None
+        with self.assertRaises(RuntimeError):
+            self.metric._invoke_bedrock("prompt")
+
     def test_score_text_falls_back_to_heuristic(self):
         text = "instructions " * 500
         with patch.object(self.metric, "_invoke_bedrock", side_effect=RuntimeError("boom")):
@@ -139,6 +144,27 @@ class TestRampUpMetricInternals(unittest.TestCase):
             (code_dir / "README_extra.txt").write_text("extra", encoding="utf-8")
             self.metric.local_directory = ModelPaths(codebase=code_dir)
             self.assertEqual(self.metric._read_local_code_readme(), "extra")
+
+    def test_read_local_code_readme_handles_read_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code_dir = Path(tmp)
+            (code_dir / "README.md").write_text("hello", encoding="utf-8")
+            self.metric.local_directory = ModelPaths(codebase=code_dir)
+            with patch("pathlib.Path.read_text", side_effect=Exception("boom")):
+                self.assertIsNone(self.metric._read_local_code_readme())
+
+    def test_load_model_card_text_direct_fetch(self):
+        self.metric.url = ModelURLs(model="https://example.com/model-card")
+        with patch.object(self.metric, "_safe_http_get", return_value="direct"):
+            self.assertEqual(self.metric._load_model_card_text(), "direct")
+
+    def test_load_model_card_text_crawls_candidates(self):
+        self.metric.url = ModelURLs(model="https://huggingface.co/foo/bar")
+        with patch.object(
+            self.metric, "_safe_http_get", side_effect=[None, "card"]
+        ) as mock_get:
+            self.assertEqual(self.metric._load_model_card_text(), "card")
+            self.assertGreaterEqual(mock_get.call_count, 2)
 
     def test_load_codebase_readme_prefers_local(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -164,6 +190,12 @@ class TestRampUpMetricInternals(unittest.TestCase):
         self.metric.url = ModelURLs(codebase="https://example.com/readme")
         with patch.object(self.metric, "_safe_http_get", return_value="direct"):
             self.assertEqual(self.metric._fetch_remote_code_readme(), "direct")
+
+    def test_load_codebase_readme_remote(self):
+        self.metric.local_directory = ModelPaths(codebase=None)
+        self.metric.url = ModelURLs(codebase="https://github.com/foo/bar")
+        with patch.object(self.metric, "_fetch_remote_code_readme", return_value="remote"):
+            self.assertEqual(self.metric._load_codebase_readme(), "remote")
 
     @patch("src.metrics.ramp_up_time.requests.get")
     def test_safe_http_get_handles_errors(self, mock_get):

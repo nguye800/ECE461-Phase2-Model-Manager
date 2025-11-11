@@ -346,6 +346,68 @@ class TestReviewednessMetric(unittest.TestCase):
             self.assertEqual(results["unreviewed_additions"], 200)
             self.assertEqual(results["total_additions"], 300)
 
+    @patch("builtins.print")
+    @patch.object(ReviewednessMetric, "_ghql")
+    def test_get_latest_commit_date_future_debug(self, mock_ghql, mock_print):
+        future = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        mock_ghql.return_value = {
+            "repository": {"defaultBranchRef": {"target": {"committedDate": future}}}
+        }
+        latest = self.metric_instance._get_latest_commit_date("owner", "repo", debug=True)
+        self.assertLessEqual(latest, future)
+
+    @patch("builtins.print")
+    @patch.object(ReviewednessMetric, "_ghql")
+    def test_analyze_prs_in_window_early_exit_debug(self, mock_ghql, mock_print):
+        mock_ghql.return_value = {
+            "repository": {
+                "pullRequests": {
+                    "nodes": [
+                        {
+                            "number": 1,
+                            "mergedAt": "2023-01-01T00:00:00Z",
+                            "additions": 10,
+                            "author": {"login": "dev"},
+                            "reviews": {"nodes": []},
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        }
+        result = self.metric_instance._analyze_prs_in_window(
+            "owner", "repo", "main", "2024-01-01T00:00:00Z", debug=True
+        )
+        self.assertEqual(result["total_prs"], 0)
+
+    @patch("builtins.print")
+    @patch.object(ReviewednessMetric, "_ghql")
+    def test_analyze_prs_in_window_full_debug(self, mock_ghql, mock_print):
+        mock_ghql.return_value = {
+            "repository": {
+                "pullRequests": {
+                    "nodes": [
+                        {
+                            "number": 3,
+                            "mergedAt": "2024-06-10T00:00:00Z",
+                            "additions": 25,
+                            "author": {"login": "author"},
+                            "reviews": {
+                                "nodes": [
+                                    {"author": {"login": "reviewer"}, "state": "APPROVED"}
+                                ]
+                            },
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        }
+        result = self.metric_instance._analyze_prs_in_window(
+            "owner", "repo", "main", "2024-01-01T00:00:00Z", debug=True
+        )
+        self.assertEqual(result["reviewed_additions"], 25)
+
     @patch("src.metrics.reviewedness.os.getenv", return_value=None)
     def test_ghql_requires_token(self, mock_env):
         with self.assertRaises(ValueError):

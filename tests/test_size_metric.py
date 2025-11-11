@@ -89,6 +89,42 @@ class TestSizeMetric(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.metric.get_size_details("nonexistent_device")
 
+    def test_setup_resources_wraps_fetch_errors(self):
+        metric = SizeMetric()
+        metric.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        with patch.object(SizeMetric, "_fetch_model_info", side_effect=RuntimeError("boom")):
+            with self.assertRaises(IOError):
+                metric.setup_resources()
+
+    def test_extract_repo_id_requires_url(self):
+        metric = SizeMetric()
+        with self.assertRaises(ValueError):
+            metric._extract_repo_id_from_url()
+        metric.set_url(ModelURLs(model="owner/model"))
+        self.assertEqual(metric._extract_repo_id_from_url(), "owner/model")
+
+    def test_get_parameter_count_prefers_known_fields(self):
+        for key in ["n_params", "num_parameters", "parameter_count", "total_params", "nparams"]:
+            self.metric.model_info = {"config": {key: 7}}
+            self.assertEqual(self.metric._get_parameter_count(), 7)
+
+    def test_estimate_parameters_additional_terms(self):
+        cfg = {
+            "hidden_size": 4,
+            "num_hidden_layers": 2,
+            "vocab_size": 10,
+            "intermediate_size": 16,
+            "max_position_embeddings": 8,
+            "type_vocab_size": 1,
+            "add_pooling_layer": True,
+            "tie_word_embeddings": False,
+        }
+        params = self.metric._estimate_parameters_from_config(cfg)
+        self.assertGreater(params, 0)
+
+    def test_get_tensor_type_default(self):
+        self.metric.model_info = {}
+        self.assertEqual(self.metric._get_tensor_type(), "float32")
     def test_extract_repo_id_variants(self):
         self.metric.set_url(ModelURLs(model="https://huggingface.co/owner/model/tree/main"))
         self.assertEqual(self.metric._extract_repo_id_from_url(), "owner/model")

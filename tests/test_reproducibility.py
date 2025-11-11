@@ -454,6 +454,32 @@ print('Hello, World!')
         self.assertTrue(self.metric_instance.response["has_model_card"])
         self.assertEqual(self.metric_instance.response["code_snippets_found"], 0)
 
+    @patch("builtins.print")
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value=None)
+    @patch.object(ReproducibilityMetric, "_get_owner_model", return_value=("owner", "model"))
+    def test_setup_resources_debug_no_model_card(self, mock_owner, mock_card, mock_print):
+        self.metric_instance.setup_resources(debug=True)
+        self.assertFalse(self.metric_instance.response["has_model_card"])
+
+    @patch("builtins.print")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=[])
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="content")
+    @patch.object(ReproducibilityMetric, "_get_owner_model", return_value=("owner", "model"))
+    def test_setup_resources_debug_no_snippets(self, mock_owner, mock_card, mock_extract, mock_print):
+        self.metric_instance.setup_resources(debug=True)
+        self.assertEqual(self.metric_instance.response["code_snippets_found"], 0)
+
+    @patch("builtins.print")
+    @patch.object(ReproducibilityMetric, "_use_llm_to_debug", return_value=("print('hi')", False))
+    @patch.object(ReproducibilityMetric, "_test_code_execution", return_value="failure")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=["print('hi')"])
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="content")
+    @patch.object(ReproducibilityMetric, "_get_owner_model", return_value=("owner", "model"))
+    def test_setup_resources_debug_loop(self, mock_owner, mock_card, mock_extract, mock_test, mock_debug, mock_print):
+        self.metric_instance.setup_resources(debug=True)
+        result = self.metric_instance.response["execution_results"][0]
+        self.assertEqual(result["final_result"], "failure_after_debug")
+
     def test_test_code_execution_success_and_failure(self):
         self.assertEqual(self.metric_instance._test_code_execution("print('ok')"), "success")
         self.assertEqual(self.metric_instance._test_code_execution("raise ValueError"), "failure")
