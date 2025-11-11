@@ -117,7 +117,7 @@ class TestDownloadManager(unittest.TestCase):
             repo_id="bert-base-uncased",
             local_dir=str(local_path),
             revision="main",
-            force_download=True,
+            resume_download=True,
             force_download=False,
         )
 
