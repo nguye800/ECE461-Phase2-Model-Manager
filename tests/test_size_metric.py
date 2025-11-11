@@ -1,10 +1,11 @@
 import unittest
 from pathlib import Path
-import types
+from unittest.mock import MagicMock, patch
 
-from src.metrics.size_metric import SizeMetric, DEVICE_SPECS
-from src.metric import BaseMetric
+import requests
+
 from src.config import ModelURLs, ModelPaths  # adjust if these live elsewhere
+from src.metrics.size_metric import DEVICE_SPECS, SizeMetric
 
 
 class TestSizeMetric(unittest.TestCase):
@@ -87,3 +88,69 @@ class TestSizeMetric(unittest.TestCase):
     def test_get_size_details_invalid_device_raises(self):
         with self.assertRaises(ValueError):
             self.metric.get_size_details("nonexistent_device")
+
+    def test_extract_repo_id_variants(self):
+        self.metric.set_url(ModelURLs(model="https://huggingface.co/owner/model/tree/main"))
+        self.assertEqual(self.metric._extract_repo_id_from_url(), "owner/model")
+        self.metric.set_url(ModelURLs(model="owner/model"))
+        self.assertEqual(self.metric._extract_repo_id_from_url(), "owner/model")
+
+    def test_get_fallback_model_info_defaults(self):
+        info = self.metric._get_fallback_model_info()
+        self.assertEqual(info["param_source"], "fallback")
+        self.assertIn("config", info)
+
+    def test_calculate_storage_size_uses_siblings(self):
+        self.metric.model_info = {"siblings": [{"size": 1024}, {"size": 2048}]}
+        size_mb = self.metric._calculate_storage_size()
+        self.assertAlmostEqual(size_mb, (1024 + 2048) / (1024 * 1024))
+
+    def test_calculate_memory_size_with_kv_cache(self):
+        self.metric.model_info = {
+            "config": {
+                "model_type": "gptx",
+                "max_position_embeddings": 128,
+                "hidden_size": 64,
+                "num_hidden_layers": 4,
+            }
+        }
+        with patch.object(self.metric, "_get_parameter_count", return_value=1000), patch.object(
+            self.metric, "_get_tensor_type", return_value="float32"
+        ):
+            mem_mb = self.metric._calculate_memory_size()
+        self.assertGreater(mem_mb, 0)
+
+    def test_get_parameter_count_prefers_config_fields(self):
+        self.metric.model_info = {"config": {"num_parameters": 123}}
+        self.assertEqual(self.metric._get_parameter_count(), 123)
+
+    def test_estimate_parameters_requires_config(self):
+        with self.assertRaises(ValueError):
+            self.metric._estimate_parameters_from_config(
+                {"num_hidden_layers": None, "vocab_size": None}
+            )
+
+    def test_get_tensor_type_strips_prefix(self):
+        self.metric.model_info = {"config": {"torch_dtype": "torch.float16"}}
+        self.assertEqual(self.metric._get_tensor_type(), "float16")
+
+    @patch("src.metrics.size_metric.requests.get")
+    def test_fetch_model_info_falls_back_when_request_fails(self, mock_get):
+        mock_get.side_effect = requests.RequestException("boom")
+        self.metric.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        info = self.metric._fetch_model_info()
+        self.assertEqual(info["param_source"], "fallback")
+
+    @patch("src.metrics.size_metric.requests.get")
+    def test_fetch_model_info_success_path(self, mock_get):
+        resp_config = MagicMock()
+        resp_config.raise_for_status = MagicMock()
+        resp_config.json.return_value = {"siblings": []}
+        resp_extra = MagicMock()
+        resp_extra.status_code = 200
+        resp_extra.json.return_value = {"hidden_size": 16}
+        mock_get.side_effect = [resp_config, resp_extra]
+        self.metric.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        info = self.metric._fetch_model_info()
+        self.assertIn("config", info)
+        self.assertEqual(info["config"]["hidden_size"], 16)

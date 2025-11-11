@@ -1,8 +1,11 @@
-import unittest
+import io
 import json
-from unittest.mock import patch, MagicMock
-from src.metrics.reproducibility import ReproducibilityMetric
+import subprocess
+import unittest
+from unittest.mock import MagicMock, patch
+
 from src.metric import ModelURLs
+from src.metrics.reproducibility import ReproducibilityMetric
 
 class TestReproducibilityMetric(unittest.TestCase):
     metric_instance: ReproducibilityMetric
@@ -450,6 +453,95 @@ print('Hello, World!')
         
         self.assertTrue(self.metric_instance.response["has_model_card"])
         self.assertEqual(self.metric_instance.response["code_snippets_found"], 0)
+
+    def test_test_code_execution_success_and_failure(self):
+        self.assertEqual(self.metric_instance._test_code_execution("print('ok')"), "success")
+        self.assertEqual(self.metric_instance._test_code_execution("raise ValueError"), "failure")
+
+    @patch("src.metrics.reproducibility.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="python", timeout=1))
+    def test_test_code_execution_timeout(self, mock_run):
+        result = self.metric_instance._test_code_execution("print('slow')")
+        self.assertEqual(result, "timeout")
+
+    @patch("src.metrics.reproducibility.subprocess.run", side_effect=RuntimeError("boom"))
+    def test_test_code_execution_error(self, mock_run):
+        result = self.metric_instance._test_code_execution("print('err')")
+        self.assertEqual(result, "error")
+
+    @patch("src.metrics.reproducibility.brt.invoke_model")
+    def test_use_llm_to_debug_handles_exception(self, mock_invoke):
+        mock_invoke.side_effect = Exception("boom")
+        fixed, success = self.metric_instance._use_llm_to_debug("code", "err")
+        self.assertIsNone(fixed)
+        self.assertFalse(success)
+
+    def test_setup_resources_without_url(self):
+        self.metric_instance.set_url(ModelURLs(model=None))
+        self.metric_instance.setup_resources()
+        self.assertIsNone(self.metric_instance.response)
+
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value=None)
+    def test_setup_resources_missing_model_card(self, mock_card):
+        self.metric_instance.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        self.metric_instance.setup_resources()
+        self.assertFalse(self.metric_instance.response["has_model_card"])
+
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="```python\nprint('hi')\n```")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=["print('hi')"])
+    @patch.object(ReproducibilityMetric, "_test_code_execution", return_value="success")
+    def test_setup_resources_records_success(self, mock_test, mock_extract, mock_card):
+        self.metric_instance.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        self.metric_instance.setup_resources()
+        self.assertEqual(self.metric_instance.response["code_snippets_found"], 1)
+        self.assertTrue(self.metric_instance.response["execution_results"][0]["runs_without_changes"])
+
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="```python\nprint('hi')\n```")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=["print('hi')"])
+    @patch.object(ReproducibilityMetric, "_test_code_execution", return_value="failure")
+    @patch.object(ReproducibilityMetric, "_use_llm_to_debug", return_value=("print('fixed')", True))
+    def test_setup_resources_records_debugging(self, mock_debug, mock_test, mock_extract, mock_card):
+        self.metric_instance.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        self.metric_instance.setup_resources()
+        result = self.metric_instance.response["execution_results"][0]
+        self.assertTrue(result["runs_with_debugging"])
+        self.assertEqual(result["final_result"], "success_after_debug")
+
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="```python\nprint('hi')\n```")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=["print('hi')"])
+    @patch.object(ReproducibilityMetric, "_test_code_execution", return_value="failure")
+    @patch.object(ReproducibilityMetric, "_use_llm_to_debug", return_value=(None, False))
+    def test_setup_resources_records_debug_failure(self, mock_debug, mock_test, mock_extract, mock_card):
+        self.metric_instance.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        self.metric_instance.setup_resources()
+        result = self.metric_instance.response["execution_results"][0]
+        self.assertFalse(result["runs_with_debugging"])
+        self.assertEqual(result["final_result"], "failure_after_debug")
+
+    def test_calculate_score_paths(self):
+        metric = self.metric_instance
+        metric.set_url(ModelURLs(model=None))
+        self.assertEqual(metric.calculate_score(), -1.0)
+
+        metric.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        metric.response = {"has_model_card": False}
+        self.assertEqual(metric.calculate_score(), 0.0)
+
+        metric.response = {"has_model_card": True, "code_snippets_found": 0}
+        self.assertEqual(metric.calculate_score(), 0.0)
+
+        metric.response = {
+            "has_model_card": True,
+            "code_snippets_found": 1,
+            "execution_results": [{"runs_without_changes": True, "runs_with_debugging": False}],
+        }
+        self.assertEqual(metric.calculate_score(), 1.0)
+
+        metric.response = {
+            "has_model_card": True,
+            "code_snippets_found": 1,
+            "execution_results": [{"runs_without_changes": False, "runs_with_debugging": True}],
+        }
+        self.assertEqual(metric.calculate_score(), 0.5)
 
 
 if __name__ == "__main__":

@@ -384,7 +384,7 @@ class TreeScoreMetric(BaseMetric):
         return avg
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     # Lightweight CLI to test TreeScoreMetric
     import sys
     from types import SimpleNamespace

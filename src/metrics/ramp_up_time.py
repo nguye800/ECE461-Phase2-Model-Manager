@@ -282,7 +282,7 @@ class RampUpMetric(BaseMetric):
             return None
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     load_dotenv()
 
     model_url = "https://huggingface.co/AdapterHub/bert-base-uncased-pf-imdb"

@@ -1,8 +1,12 @@
+import io
+import os
+import shutil
 import unittest
-from src.metrics.license import *  # pyright: ignore[reportWildcardImportFromLibrary]
 from pathlib import Path
-import os, shutil
+from unittest.mock import patch
+
 from src.metric import ModelPaths
+from src.metrics.license import *  # pyright: ignore[reportWildcardImportFromLibrary]
 
 
 class LicenseMetricTest(unittest.TestCase):
@@ -221,3 +225,67 @@ class LicenseMetricTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             incomplete_instance.setup_resources()
             incomplete_instance.calculate_score()
+
+    @patch("src.metrics.license.spdx_matcher.analyse_license_text")
+    def test_readme_spdx_fallback_without_link(self, mock_analyse):
+        mock_analyse.return_value = ({"license": {"apache-2.0": {}}}, 100)
+        dirs = ModelPaths(model=self.text_in_readme_dir)
+        metric = LicenseMetric()
+        metric.set_local_directory(dirs)
+        metric.readme_file = self.text_in_readme_dir / "README.md"
+
+        class NonClosingStringIO(io.StringIO):
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def close(self):
+                self.seek(0)
+
+        fake_file = NonClosingStringIO(
+            "# Heading\n# License\nThis is some body text referencing LGPL."
+        )
+
+        def fake_open(*args, **kwargs):
+            fake_file.seek(0)
+            return fake_file
+
+        with patch("src.metrics.license.open", fake_open):
+            score = metric.parse_readme()
+        self.assertAlmostEqual(score, license_score["apache-2.0"])
+
+    @patch("src.metrics.license.spdx_matcher.analyse_license_text")
+    def test_parse_license_file_handles_matches_shape(self, mock_analyse):
+        mock_dir = self.TEST_DIR / "matches_shape"
+        mock_dir.mkdir()
+        lic = mock_dir / "LICENSE"
+        lic.write_text("placeholder")
+        mock_analyse.return_value = ({"matches": [{"spdx_id": "MIT"}]}, 100)
+        metric = LicenseMetric()
+        metric.license_file = lic
+        score = metric.parse_license_file()
+        self.assertAlmostEqual(score, license_score["mit"])
+
+    def test_parse_license_file_fallback_detection(self):
+        mock_dir = self.TEST_DIR / "lgpl_text"
+        mock_dir.mkdir()
+        lic = mock_dir / "LICENSE"
+        lic.write_text(
+            "GNU Lesser General Public License version 2.1 or later applies to this work."
+        )
+        metric = LicenseMetric()
+        metric.license_file = lic
+        score = metric.parse_license_file()
+        self.assertAlmostEqual(score, license_score["lgpl-2.1+"])
+
+    def test_parse_license_file_mit_fallback(self):
+        mock_dir = self.TEST_DIR / "mit_text"
+        mock_dir.mkdir()
+        lic = mock_dir / "LICENSE"
+        lic.write_text("Permission is hereby granted, free of charge, to any person obtaining a copy.")
+        metric = LicenseMetric()
+        metric.license_file = lic
+        score = metric.parse_license_file()
+        self.assertAlmostEqual(score, license_score["mit"])
+
+    def test_heuristics_block_noncommercial(self):
+        self.assertFalse(heuristics_check("For research purposes only and non-commercial use."))

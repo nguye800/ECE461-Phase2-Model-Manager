@@ -221,7 +221,7 @@ class ReviewednessMetric(BaseMetric):
         return float(reviewed) / float(total)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     load_dotenv()
     
     if os.getenv("GITHUB_TOKEN") is None:

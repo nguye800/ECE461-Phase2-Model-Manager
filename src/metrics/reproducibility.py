@@ -297,7 +297,7 @@ class ReproducibilityMetric(BaseMetric):
         return 0.0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     load_dotenv()
     
     if os.getenv("GEN_AI_STUDIO_API_KEY") is None:
