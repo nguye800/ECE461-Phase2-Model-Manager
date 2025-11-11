@@ -8,6 +8,17 @@ from huggingface_hub import snapshot_download
 from src.download_manager import DownloadManager
 from src.metric import ModelURLs
 
+SNAPSHOT_DEFAULT_KWARGS = {
+    "revision": "main",
+    "resume_download": True,
+    "force_download": False,
+}
+
+DATASET_SNAPSHOT_KWARGS = {
+    **SNAPSHOT_DEFAULT_KWARGS,
+    "repo_type": "dataset",
+}
+
 
 class TestDownloadManager(unittest.TestCase):
     """Test DownloadManager in isolation using mocks"""
@@ -93,11 +104,11 @@ class TestDownloadManager(unittest.TestCase):
 
         # Check snapshot_download was called correctly
         mock_snapshot.assert_called_once_with(
-            repo_id="bert-base-uncased",
-            local_dir=str(self.models_dir / "bert-base-uncased"),
-            revision="main",
-            resume_download=True,
-            force_download=False,
+            **{
+                **SNAPSHOT_DEFAULT_KWARGS,
+                "repo_id": "bert-base-uncased",
+                "local_dir": str(self.models_dir / "bert-base-uncased"),
+            }
         )
 
         # Check return value
@@ -114,11 +125,11 @@ class TestDownloadManager(unittest.TestCase):
 
         # SHOULD call snapshot_download to update
         mock_snapshot.assert_called_once_with(
-            repo_id="bert-base-uncased",
-            local_dir=str(local_path),
-            revision="main",
-            resume_download=True,
-            force_download=False,
+            **{
+                **SNAPSHOT_DEFAULT_KWARGS,
+                "repo_id": "bert-base-uncased",
+                "local_dir": str(local_path),
+            }
         )
 
         # Should return path
@@ -167,12 +178,11 @@ class TestDownloadManager(unittest.TestCase):
 
         # Check snapshot_download was called correctly with repo_type="dataset"
         mock_snapshot.assert_called_once_with(
-            repo_id="squad",
-            repo_type="dataset",
-            local_dir=str(self.datasets_dir / "squad"),
-            revision="main",
-            force_download=True,
-            force_download=False,
+            **{
+                **DATASET_SNAPSHOT_KWARGS,
+                "repo_id": "squad",
+                "local_dir": str(self.datasets_dir / "squad"),
+            }
         )
 
         # Check return value
@@ -189,12 +199,11 @@ class TestDownloadManager(unittest.TestCase):
 
         # SHOULD call snapshot_download to update
         mock_snapshot.assert_called_once_with(
-            repo_id="squad",
-            repo_type="dataset",
-            local_dir=str(local_path),
-            revision="main",
-            force_download=True,
-            force_download=False,
+            **{
+                **DATASET_SNAPSHOT_KWARGS,
+                "repo_id": "squad",
+                "local_dir": str(local_path),
+            }
         )
 
         # Should return path
@@ -444,12 +453,11 @@ class TestDownloadManager(unittest.TestCase):
 
         # Check dataset was downloaded
         mock_snapshot.assert_called_once_with(
-            repo_id="squad",
-            repo_type="dataset",
-            local_dir=str(self.datasets_dir / "squad"),
-            revision="main",
-            force_download=True,
-            force_download=False,
+            **{
+                **DATASET_SNAPSHOT_KWARGS,
+                "repo_id": "squad",
+                "local_dir": str(self.datasets_dir / "squad"),
+            }
         )
 
         # Check return values
