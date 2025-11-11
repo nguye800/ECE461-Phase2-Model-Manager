@@ -250,6 +250,36 @@ class UploadHandlerTests(unittest.TestCase):
         self.assertEqual(request.dataset_link, "https://huggingface.co/datasets/example/dataset")
         self.assertEqual(request.metadata.get("base_models_modelID"), "SomeBaseModel")
 
+    def test_enqueue_scoring_job_sends_message_when_ready(self):
+        event = _sample_event()
+        event["dataset_link"] = "https://datasets.example.com/model-123"
+        request = upload.UploadRequest.from_event(event)
+
+        with patch.dict(
+            os.environ, {"SCORING_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123/queue"}, clear=False
+        ):
+            sqs_mock = MagicMock()
+            with patch.object(upload, "_get_sqs_client", return_value=sqs_mock):
+                queued = upload._enqueue_scoring_job(request)
+
+        self.assertTrue(queued)
+        sqs_mock.send_message.assert_called_once()
+
+    def test_enqueue_scoring_job_skips_when_urls_missing(self):
+        event = _sample_event()
+        event.pop("dataset_link", None)
+        request = upload.UploadRequest.from_event(event)
+
+        with patch.dict(
+            os.environ, {"SCORING_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123/queue"}, clear=False
+        ):
+            sqs_mock = MagicMock()
+            with patch.object(upload, "_get_sqs_client", return_value=sqs_mock):
+                queued = upload._enqueue_scoring_job(request)
+
+        self.assertFalse(queued)
+        sqs_mock.send_message.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

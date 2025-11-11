@@ -41,6 +41,7 @@ LOGGER.setLevel(logging.INFO)
 
 _S3_CLIENT: Optional[boto3.client] = None
 _RDS_CLIENT: Optional[boto3.client] = None
+_SQS_CLIENT: Optional[boto3.client] = None
 
 
 class UploadError(Exception):
@@ -174,6 +175,77 @@ def _get_rds_client() -> boto3.client:
         session: Session = boto3.session.Session()
         _RDS_CLIENT = session.client("rds-data")
     return _RDS_CLIENT
+
+
+def _get_sqs_client() -> boto3.client:
+    global _SQS_CLIENT
+    if _SQS_CLIENT is None:
+        session: Session = boto3.session.Session()
+        _SQS_CLIENT = session.client("sqs")
+    return _SQS_CLIENT
+
+
+def _resolve_codebase_url(request: UploadRequest) -> Optional[str]:
+    metadata = request.metadata or {}
+    return (
+        request.code_repository
+        or metadata.get("code_repository")
+        or metadata.get("codebase_url")
+        or metadata.get("github_link")
+    )
+
+
+def _resolve_dataset_url(request: UploadRequest) -> Optional[str]:
+    metadata = request.metadata or {}
+    return request.dataset_link or metadata.get("dataset_link") or metadata.get("dataset_url")
+
+
+def _model_ready_for_scoring(request: UploadRequest) -> bool:
+    """A model is ready for scoring when URLs for model, code, and data exist."""
+    return bool(
+        request.model_url and _resolve_codebase_url(request) and _resolve_dataset_url(request)
+    )
+
+
+def _enqueue_scoring_job(request: UploadRequest) -> bool:
+    """
+    If the model has the required artifacts, enqueue a scoring job on SQS.
+    Returns True when a message was successfully queued.
+    """
+    queue_url = os.getenv("SCORING_QUEUE_URL")
+    if not queue_url:
+        LOGGER.debug("SCORING_QUEUE_URL not set; skipping scoring enqueue.")
+        return False
+
+    if not _model_ready_for_scoring(request):
+        LOGGER.info(
+            "Model %s missing URLs required for scoring; skipping queue.",
+            request.model_id,
+        )
+        return False
+
+    message_body = json.dumps(
+        {
+            "model_id": request.model_id,
+            "model_url": request.model_url,
+            "codebase_url": _resolve_codebase_url(request),
+            "dataset_url": _resolve_dataset_url(request),
+            "queued_at": datetime.utcnow().isoformat(),
+        }
+    )
+
+    try:
+        sqs_client = _get_sqs_client()
+        sqs_client.send_message(QueueUrl=queue_url, MessageBody=message_body)
+        LOGGER.info("Queued scoring job for model %s", request.model_id)
+        return True
+    except (BotoCoreError, ClientError) as exc:
+        LOGGER.warning(
+            "Failed to enqueue scoring job for model %s: %s",
+            request.model_id,
+            exc,
+        )
+        return False
 
 
 def _load_rds_config() -> RDSConfig:
@@ -501,11 +573,14 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             _insert_model_record(rds_config, db_params)
             action = "created"
 
+        queued_scoring_job = _enqueue_scoring_job(request)
+
         response_body = {
             "status": "success",
             "action": action,
             "model_id": request.model_id,
             "artifacts": uploaded_artifacts,
+            "scoring_job_enqueued": queued_scoring_job,
         }
         return _format_response(200, response_body)
 
