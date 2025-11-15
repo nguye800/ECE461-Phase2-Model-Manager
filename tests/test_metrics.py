@@ -6,6 +6,8 @@ from src.config import *
 
 
 class DummyMetric1(BaseMetric):
+    metric_name = "dummy1"
+
     @typing_extensions.override
     def calculate_score(self):
         return 0.5
@@ -16,6 +18,8 @@ class DummyMetric1(BaseMetric):
 
 
 class DummyMetric2(BaseMetric):
+    metric_name = "dummy2"
+
     @typing_extensions.override
     def calculate_score(self):
         return 0.7
@@ -26,6 +30,8 @@ class DummyMetric2(BaseMetric):
 
 
 class DummyMetric4(BaseMetric):
+    metric_name = "dummy4"
+
     @typing_extensions.override
     def calculate_score(self):
         return 0.0
@@ -36,6 +42,8 @@ class DummyMetric4(BaseMetric):
 
 
 class DummyMetric3(BaseMetric):
+    metric_name = "dummy3"
+
     @typing_extensions.override
     def calculate_score(self):
         return 1.0
@@ -46,6 +54,8 @@ class DummyMetric3(BaseMetric):
 
 
 class DummyMetric5(BaseMetric):
+    metric_name = "dummy5"
+
     @typing_extensions.override
     def calculate_score(self):
         return {"a": 1.0}
@@ -64,6 +74,31 @@ MODEL_URLS_3: ModelURLs = ModelURLs(
     dataset="https://github.com/user/repo",
     codebase="https://github.com/user/repo",
 )
+
+
+class ExplodingMetric(BaseMetric):
+    metric_name = "exploding"
+
+    @typing_extensions.override
+    def setup_resources(self):
+        pass
+
+    @typing_extensions.override
+    def calculate_score(self):
+        raise RuntimeError("boom")
+
+
+class SuperCallingMetric(BaseMetric):
+    metric_name = "call_super"
+
+    @typing_extensions.override
+    def setup_resources(self):
+        pass
+
+    @typing_extensions.override
+    def calculate_score(self):
+        super().calculate_score()
+        return 1.0
 
 
 class BaseMetricTestCase(unittest.TestCase):
@@ -234,3 +269,44 @@ class TestNetScoreCalculator(BaseMetricTestCase):
             metrics
         )
         self.assertAlmostEqual(net_score, 1.0)
+
+
+class TestMetricCoreEdgeCases(unittest.TestCase):
+    def test_base_metric_run_handles_exception(self):
+        metric = ExplodingMetric()
+        metric.set_params(1, "pc")
+        metric.run()
+        self.assertEqual(metric.score, 0.0)
+        self.assertGreaterEqual(metric.runtime, 0.0)
+
+    def test_base_metric_calculate_score_super_call(self):
+        metric = SuperCallingMetric()
+        metric.set_params(2, "pc")
+        metric.run()
+        self.assertEqual(metric.score, 1.0)
+
+    def test_score_normalization_helpers(self):
+        calc = NetScoreCalculator(PFReciprocal())
+        self.assertAlmostEqual(calc.average_dict_score({"a": 0.4, "b": 0.6}), 0.5)
+        with self.assertRaises(AssertionError):
+            calc.validate_scores_norm({"bad": 1.2})
+        with self.assertRaises(AssertionError):
+            calc.validate_scores_norm(-0.1)
+        self.assertAlmostEqual(calc.get_metric_score({"a": 0.2, "b": 0.4}), 0.3)
+        self.assertEqual(calc.get_metric_score(0.7), 0.7)
+
+    def test_analyzer_output_and_weights(self):
+        calc = NetScoreCalculator(PFReciprocal())
+        metrics = [
+            DummyMetric1().set_params(1, "").run(),
+            DummyMetric2().set_params(2, "").run(),
+        ]
+        priority_dict = calc.generate_scores_priority_dict(metrics)
+        self.assertEqual(priority_dict, {1: [0.5], 2: [0.7]})
+        compressed = calc.compress_priorities(priority_dict)
+        self.assertEqual(compressed, [[0.5], [0.7]])
+        weights = calc.get_priority_weights(compressed, len(metrics))
+        self.assertAlmostEqual(sum(weights), 1.0)
+        analyzer = AnalyzerOutput(PFReciprocal(), metrics, MODEL_URLS_1)
+        self.assertIn("dummy1", analyzer.individual_scores)
+        self.assertEqual(str(analyzer), "")

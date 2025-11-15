@@ -131,7 +131,11 @@ def run_workflow(
     # HERE it should check if the inputted models are already stored locally
     metric_runner: MetricRunner = metric_stager.attach_model_sources(
         input_urls, input_paths
-    ).set_num_processes(config.num_processes)
+    )
+    if config.run_multi:
+        metric_runner.set_num_processes(config.num_processes)
+    else:
+        metric_runner.multiprocessing_pool = None
     metric_runner.run_multi = config.run_multi
     processed_metrics: list[BaseMetric] = metric_runner.run()
 

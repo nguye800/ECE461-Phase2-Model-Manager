@@ -82,7 +82,14 @@ class SQLiteAccessor:
             self.connection: sqlite3.Connection = sqlite3.connect(db_location)
         self.cursor: sqlite3.Cursor = self.connection.cursor()
         self.metric_schema = metric_schema
+        # If the existing DB schema doesn't match the requested metric schema,
+        # recreate the table to include new metrics (backward-compatible migration).
         if not self.db_exists() and create_if_missing:
+            try:
+                self.cursor.execute("DROP TABLE IF EXISTS models")
+                self.connection.commit()
+            except Exception:
+                pass
             self.init_database()
 
     def __del__(self):
