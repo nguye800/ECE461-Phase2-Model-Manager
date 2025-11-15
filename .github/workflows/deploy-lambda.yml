@@ -1,0 +1,92 @@
+name: Deploy AWS Lambda (Container Image)
+
+on:
+  push:
+    branches:
+      - main  # Deploy when code is merged to main
+      - rate_dev
+
+permissions:
+  id-token: write      # needed for OIDC
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: 965919626283
+  RATE_LAMBDA_FUNCTION_NAME: Rate
+  RATE_ECR_REPOSITORY: ece461/function-containers
+  RATE_DOCKERFILE: dockerfiles/dockerfile.rate
+  RATE_IMAGE_TAG: rate
+  ENQUEUE_LAMBDA_FUNCTION_NAME: Enqueue-Rate
+  ENQUEUE_ECR_REPOSITORY: ece461/function-containers
+  ENQUEUE_DOCKERFILE: dockerfiles/dockerfile.enqueue_rate
+  ENQUEUE_IMAGE_TAG: enqueue-rate
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Debug GitHub context
+        run: |
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_REF_NAME=$GITHUB_REF_NAME"
+          echo "GITHUB_REPOSITORY=$GITHUB_REPOSITORY"
+
+      - name: Debug OIDC Token Claims
+        run: |
+          curl -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | \
+            jq -R 'split(".") | .[1] | @base64d | fromjson'
+
+      # (Optional) build/test steps could go here
+      # e.g., lint Dockerfile, run unit tests, etc.
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push rate Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.RATE_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
+
+      - name: Build, tag, and push enqueue-rate Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.ENQUEUE_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+
+      # Uncomment after the Lambda exists and you want automatic deploys
+      - name: Update rate Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
+
+      - name: Update enqueue_rate Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+
+      # Optional: uncomment once the Lambda is live
+      - name: Confirm deployment
+        run: |
+          aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }}

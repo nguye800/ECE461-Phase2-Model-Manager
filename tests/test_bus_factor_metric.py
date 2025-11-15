@@ -1,141 +1,50 @@
 import json
-import os
 import unittest
-from datetime import datetime
-from unittest.mock import patch
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
-from src.metrics.bus_factor import BusFactorMetric
+from src.metrics.bus_factor import *  # pyright: ignore[reportWildcardImportFromLibrary]
 from src.metric import ModelURLs
 
 
-class _FakeResponse:
-    def __init__(self, payload, ok=True, status_code=200):
-        self.text = json.dumps(payload)
-        self.ok = ok
-        self.status_code = status_code
-
-    def raise_for_status(self):
-        if not self.ok or self.status_code >= 400:
-            from requests import HTTPError
-
-            raise HTTPError(f"Status code {self.status_code}")
-
-
-def _build_commit_payload(commit_map: dict[str, int]) -> dict:
-    edges = []
-    for email, count in commit_map.items():
-        hist_edges = [
-            {"node": {"author": {"email": email}}}
-            for _ in range(count)
-        ]
-        edges.append({"node": {"target": {"history": {"edges": hist_edges}}}})
-    return {"data": {"repository": {"refs": {"edges": edges}}}}
-
-
 class TestBustFactor(unittest.TestCase):
+    metric_instance: BusFactorMetric
+
     def setUp(self):
         self.metric_instance = BusFactorMetric()
-        os.environ["GITHUB_TOKEN"] = "dummy-token"
-
-        def fake_post(url, json=None, headers=None, timeout=None):
-            query = json.get("query", "") if isinstance(json, dict) else ""
-            owner = ""
-            repo = ""
-            if "owner:\"" in query and "repository(name:\"" in query:
-                try:
-                    owner = query.split("owner:\"")[1].split("\"")[0]
-                    repo = query.split("repository(name:\"")[1].split("\"")[0]
-                except IndexError:
-                    pass
-            key = (owner, repo)
-            if key == ("silica-dev", "TerrorCTF"):
-                payload = _build_commit_payload(
-                    {
-                        "silicasandwhich@github.com": 18,
-                        "marinom@rose-hulman.edu": 6,
-                        "rogerscm@rose-hulman.edu": 5,
-                        "102613108+CarsonRogers@users.noreply.github.com": 1,
-                    }
-                )
-                return _FakeResponse(payload)
-            if key == ("silica-dev", "2nd_to_ft_conversion_script"):
-                payload = _build_commit_payload({"owner@example.com": 500})
-                return _FakeResponse(payload)
-            if key == ("silica-dev", "PLEASEDONTACTUALLYMAKETHIS"):
-                return _FakeResponse({"errors": [{"message": "Not Found"}]}, ok=False, status_code=404)
-            if key == ("leftwm", "leftwm"):
-                return _FakeResponse(_build_commit_payload({}))
-            return _FakeResponse(_build_commit_payload({}))
-
-        self.requests_patcher = patch("src.metrics.bus_factor.requests.post", side_effect=fake_post)
-        self.requests_patcher.start()
-
-        def fake_list_repo_commits(repo_id):
-            class DummyCommit:
-                def __init__(self, created_at, authors):
-                    self.created_at = created_at
-                    self.authors = authors
-
-            if repo_id == "google-bert/bert-base-uncased":
-                base_time = datetime.fromisoformat("2024-01-01T00:00:00+00:00")
-                commit_map = {
-                    "alice": 40,
-                    "bob": 30,
-                    "charlie": 3,
-                    "diana": 3,
-                    "eve": 3,
-                    "frank": 3,
-                    "grace": 3,
-                    "heidi": 3,
-                    "ivan": 3,
-                    "judy": 3,
-                }
-                commits = []
-                for author, count in commit_map.items():
-                    commits.extend(
-                        DummyCommit(base_time, [author]) for _ in range(count)
-                    )
-                return commits
-            return []
-
-        self.hf_patcher = patch("src.metrics.bus_factor.list_repo_commits", side_effect=fake_list_repo_commits)
-        self.hf_patcher.start()
-
-    def tearDown(self):
-        self.requests_patcher.stop()
-        self.hf_patcher.stop()
 
     # calculation testing
 
-    def test_lopsided_team(self):
+    def testLopsidedTeam(self):
         team = {"hard_carry": 35, "normal_dev": 10, "lazy_user": 1}
         total_commits = sum(team.values())
         self.assertAlmostEqual(
             self.metric_instance.calculate_bus_factor(total_commits, team), 0.0
         )
 
-    def test_equal_team(self):
+    def testEqualTeam(self):
         team = {"cool_dev": 20, "great_dev": 20, "some_guy": 20}
         total_commits = sum(team.values())
         self.assertAlmostEqual(
             self.metric_instance.calculate_bus_factor(total_commits, team), 1.0
         )
 
-    def test_solo_dev(self):
+    def testSoloDev(self):
         team = {"one_guy_from_nebraska": 172}
         total_commits = sum(team.values())
         self.assertAlmostEqual(
             self.metric_instance.calculate_bus_factor(total_commits, team), 0.0
         )
 
-    def test_empty_repo(self):
+    def testEmptyRepo(self):
         team: dict[str, int] = {}
         total_commits = 0
         self.assertAlmostEqual(
             self.metric_instance.calculate_bus_factor(total_commits, team), 0.0
         )
 
-    def test_average_team(self):
+    def testAverageTeam(self):
         team: dict[str, int] = {
             "lead_programmer": 20,
             "team_member": 10,
@@ -145,35 +54,46 @@ class TestBustFactor(unittest.TestCase):
             "intern": 3,
         }
         total_commits = sum(team.values())
+        # total commits is 78, 78/2 = 39
+        #  remove lead programmer and future successor, remove half the commits.
         self.assertAlmostEqual(
             self.metric_instance.calculate_bus_factor(total_commits, team),
             2 * 2 / len(team),
         )
 
+    # test repo parsing
     def test_team_repo(self):
+        # archived project, unlikely to change much
         urls = ModelURLs(model="nonexistent")
         urls.codebase = "https://github.com/silica-dev/TerrorCTF"
         self.metric_instance.set_url(urls)
-        self.metric_instance.setup_resources()
-        self.metric_instance.get_response(urls.codebase)
-        parsed_response = self.metric_instance.parse_response()
         commit_score = {
             "silicasandwhich@github.com": 18,
             "marinom@rose-hulman.edu": 6,
             "rogerscm@rose-hulman.edu": 5,
             "102613108+CarsonRogers@users.noreply.github.com": 1,
         }
-        self.assertDictEqual(parsed_response[1], commit_score)
-        self.assertEqual(parsed_response[0], 30)
-
-    def test_solo_repo(self):
-        urls = ModelURLs(model="nonexistent")
-        urls.codebase = "https://www.github.com/silica-dev/2nd_to_ft_conversion_script"
-        self.metric_instance.set_url(urls)
+        total_commits = 30
         self.metric_instance.setup_resources()
         self.metric_instance.get_response(urls.codebase)
         parsed_response = self.metric_instance.parse_response()
-        self.assertGreaterEqual(parsed_response[0], 500)
+        self.assertDictEqual(parsed_response[1], commit_score)
+        self.assertEqual(parsed_response[0], total_commits)
+
+    def test_solo_repo(self):
+        # you can't remove commits from a repository
+        urls = ModelURLs(model="nonexistent")
+        urls.codebase = "https://www.github.com/silica-dev/2nd_to_ft_conversion_script"
+        self.metric_instance.set_url(urls)
+        total_commits = 1000
+        self.metric_instance.setup_resources()
+        self.metric_instance.get_response(urls.codebase)
+        parsed_response = self.metric_instance.parse_response()
+        self.assertGreaterEqual(total_commits, parsed_response[0])
+        self.assertGreaterEqual(
+            total_commits,
+            parsed_response[1]["43558271+Silicasandwhich@users.noreply.github.com"],
+        )
 
     def test_nonexistent_repo(self):
         urls = ModelURLs(model="nonexistent")
@@ -181,8 +101,9 @@ class TestBustFactor(unittest.TestCase):
         self.metric_instance.set_url(urls)
         self.metric_instance.setup_resources()
         with self.assertRaises(ValueError):
-            self.metric_instance.get_response(urls.codebase)
+            self.metric_instance.parse_response()
 
+    # url parsing
     def test_invalid_url(self):
         urls = ModelURLs(model="nonexistent")
         urls.codebase = "sdvx.org"
@@ -197,6 +118,8 @@ class TestBustFactor(unittest.TestCase):
         self.metric_instance.setup_resources()
         self.metric_instance.get_response(urls.codebase)
         self.assertIsNotNone(self.metric_instance.response)
+        if self.metric_instance.response is None:
+            return
         self.assertTrue(self.metric_instance.response.ok)
 
     def test_specific_branch(self):
@@ -206,22 +129,43 @@ class TestBustFactor(unittest.TestCase):
         self.metric_instance.setup_resources()
         self.metric_instance.get_response(urls.codebase)
         self.assertIsNotNone(self.metric_instance.response)
+        if self.metric_instance.response is None:
+            return
         self.assertTrue(self.metric_instance.response.ok)
 
+    # full integration
+
+    # test repo parsing
     def test_team_repo_full(self):
+        # archived project, unlikely to change much
         urls = ModelURLs(model="nonexistent")
         urls.codebase = "https://github.com/silica-dev/TerrorCTF"
         self.metric_instance.set_url(urls)
+        # commit_score = {
+        #    "silicasandwhich@github.com": 18,
+        #    "marinom@rose-hulman.edu": 6,
+        #    "rogerscm@rose-hulman.edu": 5,
+        #    "102613108+CarsonRogers@users.noreply.github.com": 1,
+        # }
+        # remove silicasandwhich@github.com and more than 50% is gone
         self.metric_instance.run()
         self.assertIsInstance(self.metric_instance.score, float)
+        if isinstance(self.metric_instance.score, dict):
+            return
+        self.assertAlmostEqual(self.metric_instance.score, 0.0)
 
     def test_huggingface_url(self):
+        # almost all huggingface models have pretty horrendous bus factors, this one isn't awful
         urls = ModelURLs(model="https://huggingface.co/google-bert/bert-base-uncased")
         self.metric_instance.set_url(urls)
         self.metric_instance.run()
-        self.assertAlmostEqual(self.metric_instance.score, 0.4)
+        self.assertIsInstance(self.metric_instance.score, float)
+        if isinstance(self.metric_instance.score, dict):
+            return
+        self.assertAlmostEqual(self.metric_instance.score, 3 / 15 * 2)
 
     def test_weighted_sum(self):
+        # almost all huggingface models have pretty horrendous bus factors
         factor_1 = 0.5
         commits_1 = 100
         factor_2 = 0.25
@@ -234,5 +178,127 @@ class TestBustFactor(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestBusFactorUnit(unittest.TestCase):
+    def setUp(self):
+        self.metric = BusFactorMetric()
+
+    def test_get_response_validates_url(self):
+        with self.assertRaises(ValueError):
+            self.metric.get_response("not a github url")
+
+    def test_get_response_requires_token(self):
+        with patch("src.metrics.bus_factor.os.getenv", return_value=None):
+            with self.assertRaises(ValueError):
+                self.metric.get_response("https://github.com/owner/repo")
+
+    @patch("src.metrics.bus_factor.requests.post")
+    def test_get_response_handles_request_errors(self, mock_post):
+        mock_post.side_effect = requests.exceptions.RequestException("boom")
+        with patch("src.metrics.bus_factor.os.getenv", return_value="token"):
+            with self.assertRaises(ValueError):
+                self.metric.get_response("https://github.com/owner/repo")
+
+    @patch("src.metrics.bus_factor.requests.post")
+    def test_get_response_success(self, mock_post):
+        fake_response = MagicMock()
+        mock_post.return_value = fake_response
+        with patch("src.metrics.bus_factor.os.getenv", return_value="token"):
+            self.metric.get_response("https://github.com/owner/repo")
+        self.assertIs(self.metric.response, fake_response)
+        mock_post.assert_called_once()
+
+    def test_parse_response_without_payload(self):
+        total, scores = self.metric.parse_response()
+        self.assertEqual(total, 0)
+        self.assertEqual(scores, {})
+
+    def test_parse_response_invalid_json(self):
+        self.metric.response = SimpleNamespace(text="not-json")
+        with self.assertRaises(ValueError):
+            self.metric.parse_response()
+
+    def test_parse_response_graphql_errors(self):
+        payload = {"errors": [{"message": "nope"}]}
+        self.metric.response = SimpleNamespace(text=json.dumps(payload))
+        with self.assertRaises(ValueError):
+            self.metric.parse_response()
+
+    def test_parse_response_success(self):
+        payload = {
+            "data": {
+                "repository": {
+                    "refs": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "target": {
+                                        "history": {
+                                            "edges": [
+                                                {"node": {"author": {"email": "a@x"}}},
+                                                {"node": {"author": {"email": "b@x"}}},
+                                                {"node": {"author": {"email": "a@x"}}},
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        self.metric.response = SimpleNamespace(text=json.dumps(payload))
+        total, scores = self.metric.parse_response()
+        self.assertEqual(total, 3)
+        self.assertEqual(scores["a@x"], 2)
+        self.assertEqual(scores["b@x"], 1)
+
+    @patch("src.metrics.bus_factor.list_repo_commits")
+    def test_parse_model_handles_errors(self, mock_list_commits):
+        mock_list_commits.side_effect = RuntimeError("boom")
+        self.metric.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        total, scores = self.metric.parse_model()
+        self.assertEqual(total, 0)
+        self.assertEqual(scores, {})
+
+    @patch("src.metrics.bus_factor.list_repo_commits")
+    def test_parse_model_counts_recent_commits(self, mock_list_commits):
+        class Commit:
+            def __init__(self, ts, authors):
+                self.created_at = ts
+                self.authors = authors
+
+        recent = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        older = datetime(2019, 1, 1, tzinfo=timezone.utc)
+        mock_list_commits.return_value = [
+            Commit(recent, ["a", "b"]),
+            Commit(older, ["c"]),
+        ]
+        self.metric.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        total, scores = self.metric.parse_model()
+        self.assertEqual(total, 1)
+        self.assertEqual(scores, {"a": 1, "b": 1})
+
+    def test_calc_weighted_sum_edge_cases(self):
+        self.assertEqual(self.metric.calc_weighted_sum(0, 0, 0.5, 0.5), 0.0)
+        self.assertEqual(self.metric.calc_weighted_sum(0, 5, 0.5, 0.7), 0.7)
+        self.assertEqual(self.metric.calc_weighted_sum(3, 0, 0.6, 0.4), 0.6)
+
+    @patch("src.metrics.bus_factor.requests.post")
+    def test_setup_resources_without_codebase(self, mock_post):
+        metric = BusFactorMetric()
+        metric.set_url(ModelURLs(model="https://huggingface.co/model"))
+        metric.setup_resources()
+        self.assertIsNone(metric.response)
+        mock_post.assert_not_called()
+
+    @patch("src.metrics.bus_factor.requests.post")
+    def test_setup_resources_with_codebase(self, mock_post):
+        fake_resp = MagicMock()
+        mock_post.return_value = fake_resp
+        metric = BusFactorMetric()
+        urls = ModelURLs(model="https://huggingface.co/model", codebase="https://github.com/owner/repo")
+        metric.set_url(urls)
+        with patch("src.metrics.bus_factor.os.getenv", return_value="token"):
+            metric.setup_resources()
+        self.assertIs(metric.response, fake_resp)

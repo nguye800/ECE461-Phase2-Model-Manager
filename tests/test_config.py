@@ -108,6 +108,8 @@ class TestConfigContractValidation(unittest.TestCase):
         # create a directory and remove read permission
         unreadable_dir = Path(self.tmp_path) / "unreadable"
         unreadable_dir.mkdir()
+        if os.name == "nt":
+            self.skipTest("chmod semantics differ on Windows")
         # Remove read for owner
         current_mode = unreadable_dir.stat().st_mode
         try:

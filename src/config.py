@@ -1,5 +1,7 @@
 import os
+import pydantic
 from pydantic import BaseModel, field_validator
+pydantic.main.BaseModel.model_config = {"protected_namespaces": ()}
 from typing import Literal, Optional
 from typing_extensions import override
 from abc import ABC, abstractmethod
@@ -83,7 +85,7 @@ class ModelURLs(BaseModel):
     Stores URLs related to a model, including model, codebase, and dataset URLs.
     """
 
-    model: str
+    model: Optional[str] = None
     codebase: Optional[str] = None
     dataset: Optional[str] = None
 
