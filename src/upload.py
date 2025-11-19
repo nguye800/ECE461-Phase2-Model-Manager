@@ -4,19 +4,14 @@ Lambda function implementation for handling model uploads.
 This module converts the previous pseudo-code into executable logic. The handler
 accepts an event describing the model metadata and artifacts, uploads the
 artifacts to S3, and records/updates an entry in the model registry stored in
-RDS via the Data API.
-
-The implementation intentionally avoids tight coupling to a single RDS dialect.
-It first checks whether a record already exists and then issues either an
-INSERT or UPDATE statement accordingly. The SQL statements mirror the schema
-defined in ``src/dummydb.py``; missing values default to ``NULL``.
+DynamoDB. Each record mirrors the structure consumed by the metadata and rating
+Lambdas so downstream services can read the same data model.
 
 Environment variables used:
     MODEL_BUCKET_NAME: S3 bucket where artifacts will be stored (required)
-    MODEL_REGISTRY_CLUSTER_ARN: ARN of the Aurora Serverless cluster (required)
-    MODEL_REGISTRY_SECRET_ARN: ARN of the Secrets Manager secret for the DB (required)
-    MODEL_REGISTRY_DATABASE: Database name inside the cluster (required)
-    MODEL_REGISTRY_TABLE: Optional override for the registry table name
+    ARTIFACTS_DDB_TABLE: DynamoDB table that stores artifact metadata (required)
+    ARTIFACTS_DDB_REGION: Optional override for the DynamoDB region
+    SCORING_QUEUE_URL: URL of the SQS queue used to trigger rating jobs (optional)
 """
 
 from __future__ import annotations
@@ -29,6 +24,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional
 import zipfile
 
@@ -40,8 +36,8 @@ LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 
 _S3_CLIENT: Optional[boto3.client] = None
-_RDS_CLIENT: Optional[boto3.client] = None
 _SQS_CLIENT: Optional[boto3.client] = None
+_ARTIFACTS_TABLE = None
 
 
 class UploadError(Exception):
@@ -143,16 +139,6 @@ class UploadRequest:
         )
 
 
-@dataclass
-class RDSConfig:
-    """Configuration for accessing the model registry within RDS."""
-
-    cluster_arn: str
-    secret_arn: str
-    database: str
-    table_name: str = "model_registry"
-
-
 def _require_env(name: str, *, optional: bool = False, default: Optional[str] = None) -> str:
     """Fetch an environment variable or raise if missing."""
     value = os.getenv(name, default)
@@ -169,12 +155,17 @@ def _get_s3_client() -> boto3.client:
     return _S3_CLIENT
 
 
-def _get_rds_client() -> boto3.client:
-    global _RDS_CLIENT
-    if _RDS_CLIENT is None:
-        session: Session = boto3.session.Session()
-        _RDS_CLIENT = session.client("rds-data")
-    return _RDS_CLIENT
+def _get_artifacts_table():
+    global _ARTIFACTS_TABLE
+    if _ARTIFACTS_TABLE is not None:
+        return _ARTIFACTS_TABLE
+
+    table_name = _require_env("ARTIFACTS_DDB_TABLE")
+    region = os.getenv("ARTIFACTS_DDB_REGION")
+    session: Session = boto3.session.Session()
+    dynamo = session.resource("dynamodb", region_name=region) if region else session.resource("dynamodb")
+    _ARTIFACTS_TABLE = dynamo.Table(table_name)
+    return _ARTIFACTS_TABLE
 
 
 def _get_sqs_client() -> boto3.client:
@@ -217,6 +208,171 @@ def _enqueue_scoring_job(request: UploadRequest) -> bool:
         LOGGER.debug("SCORING_QUEUE_URL not set; skipping scoring enqueue.")
         return False
 
+
+def _extract_artifact_type(event: Dict[str, Any]) -> str:
+    path = event.get("rawPath") or event.get("path", "")
+    segments = [segment for segment in path.strip("/").split("/") if segment]
+    if len(segments) >= 2 and segments[0] == "artifact":
+        return segments[1].lower()
+    path_params = event.get("pathParameters") or {}
+    return (path_params.get("artifact_type") or "model").lower()
+
+
+def _build_dynamo_key(artifact_type: str, model_id: str) -> Dict[str, str]:
+    pk_field = os.getenv("RATE_PK_FIELD", "pk")
+    sk_field = os.getenv("RATE_SK_FIELD", "sk")
+    pk_prefix = os.getenv("RATE_PK_PREFIX") or f"{artifact_type.upper()}#"
+    if not pk_prefix.endswith("#"):
+        pk_prefix = f"{pk_prefix}#"
+    sk_value = os.getenv("RATE_META_SK", "META")
+    return {
+        pk_field: f"{pk_prefix}{model_id}",
+        sk_field: sk_value,
+    }
+
+
+_METRIC_BREAKDOWN_KEYS = [
+    "ramp_up_time",
+    "bus_factor",
+    "performance_claims",
+    "license",
+    "size_score",
+    "dataset_and_code",
+    "dataset_quality",
+    "code_quality",
+    "reproducibility",
+    "reviewedness",
+    "tree_score",
+]
+
+
+def _default_metrics() -> Dict[str, Any]:
+    breakdown = {
+        name: {"value": Decimal("0"), "available": False}
+        for name in _METRIC_BREAKDOWN_KEYS
+    }
+    return {
+        "average": Decimal("0"),
+        "evidence_coverage": Decimal("0"),
+        "breakdown": breakdown,
+    }
+
+
+def _default_scoring() -> Dict[str, Any]:
+    return {
+        "status": "INITIAL",
+        "score_version": "v1",
+    }
+
+
+def _default_eligibility() -> Dict[str, Any]:
+    return {"minimum_evidence_met": False, "reason": "Pending initial scoring"}
+
+
+def _default_approval() -> Dict[str, Any]:
+    return {"visible": False, "status": "PENDING"}
+
+
+def _prepare_for_dynamo(value: Any) -> Any:
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, dict):
+        prepared: Dict[str, Any] = {}
+        for key, entry in value.items():
+            if entry is None:
+                continue
+            prepared[key] = _prepare_for_dynamo(entry)
+        return prepared
+    if isinstance(value, list):
+        return [_prepare_for_dynamo(entry) for entry in value if entry is not None]
+    return value
+
+
+def _merge_dataset_info(request: UploadRequest, metadata: Dict[str, Any], existing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    dataset = metadata.get("dataset") or existing.get("dataset") or {}
+    link = request.dataset_link or metadata.get("dataset_link")
+    name = request.dataset_name or metadata.get("dataset_name")
+    if link:
+        dataset.setdefault("url", link)
+    if name:
+        dataset.setdefault("name", name)
+    return dataset or None
+
+
+def _merge_codebase_info(request: UploadRequest, metadata: Dict[str, Any], existing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    codebase = metadata.get("codebase") or existing.get("codebase") or {}
+    repo = _resolve_codebase_url(request)
+    if repo:
+        codebase.setdefault("url", repo)
+    return codebase or None
+
+
+def _build_ddb_item(
+    request: UploadRequest,
+    uploaded_artifacts: Iterable[Dict[str, Any]],
+    artifact_type: str,
+    existing: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    metadata = request.metadata or {}
+    now = datetime.now(timezone.utc).isoformat()
+    artifact_type_upper = artifact_type.upper()
+
+    item: Dict[str, Any] = existing.copy() if existing else {}
+    item.update(_build_dynamo_key(artifact_type, request.model_id))
+    item["type"] = artifact_type_upper
+    item["model_id"] = request.model_id
+    item["model_url"] = request.model_url
+    if metadata.get("name"):
+        item["name"] = metadata["name"]
+    elif "name" not in item:
+        item["name"] = request.model_id
+
+    if metadata.get("base_models"):
+        item["base_models"] = metadata["base_models"]
+
+    dataset_info = _merge_dataset_info(request, metadata, item)
+    if dataset_info:
+        item["dataset"] = dataset_info
+
+    codebase_info = _merge_codebase_info(request, metadata, item)
+    if codebase_info:
+        item["codebase"] = codebase_info
+
+    assets = metadata.get("assets") or item.get("assets") or {}
+    artifacts = list(uploaded_artifacts)
+    if artifacts:
+        first = artifacts[0]
+        assets.setdefault("model_zip_key", first["key"])
+        assets.setdefault("bucket", first["bucket"])
+        if first.get("size_bytes") is not None:
+            assets.setdefault("model_zip_size_bytes", first["size_bytes"])
+    if assets:
+        item["assets"] = assets
+
+    if metadata.get("metrics"):
+        item["metrics"] = metadata["metrics"]
+    else:
+        item["metrics"] = item.get("metrics") or _default_metrics()
+
+    item["scoring"] = item.get("scoring") or _default_scoring()
+    item["eligibility"] = item.get("eligibility") or _default_eligibility()
+    item["approval"] = item.get("approval") or _default_approval()
+
+    if not existing:
+        item["created_at"] = now
+    item["updated_at"] = now
+
+    return _prepare_for_dynamo(item)
+
+
+def _fetch_existing_item(table, key: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    try:
+        response = table.get_item(Key=key)
+    except ClientError:
+        LOGGER.exception("Failed to read existing artifact record from DynamoDB")
+        raise UploadError("Unable to access artifact metadata store")
+    return response.get("Item")
+
     if not _model_ready_for_scoring(request):
         LOGGER.info(
             "Model %s missing URLs required for scoring; skipping queue.",
@@ -246,15 +402,6 @@ def _enqueue_scoring_job(request: UploadRequest) -> bool:
             exc,
         )
         return False
-
-
-def _load_rds_config() -> RDSConfig:
-    return RDSConfig(
-        cluster_arn=_require_env("MODEL_REGISTRY_CLUSTER_ARN"),
-        secret_arn=_require_env("MODEL_REGISTRY_SECRET_ARN"),
-        database=_require_env("MODEL_REGISTRY_DATABASE"),
-        table_name=_require_env("MODEL_REGISTRY_TABLE", optional=True, default="model_registry"),
-    )
 
 
 def _upload_artifacts(request: UploadRequest, bucket: str) -> List[Dict[str, Any]]:
@@ -429,116 +576,6 @@ def _apply_extracted_metadata(request: UploadRequest, extracted: Dict[str, Any])
         metadata["zip_sample_listing"] = extracted["zip_sample_listing"]
 
 
-def _record_exists(rds_config: RDSConfig, model_id: str) -> bool:
-    """Check whether a model record already exists."""
-    rds_client = _get_rds_client()
-    sql = (
-        f"SELECT repo_id FROM {rds_config.table_name} "
-        "WHERE repo_id = :model_id LIMIT 1"
-    )
-    response = rds_client.execute_statement(
-        resourceArn=rds_config.cluster_arn,
-        secretArn=rds_config.secret_arn,
-        database=rds_config.database,
-        sql=sql,
-        parameters=[{"name": "model_id", "value": {"stringValue": model_id}}],
-    )
-    return bool(response.get("records"))
-
-
-def _build_db_parameters(
-    request: UploadRequest,
-    uploaded_artifacts: Iterable[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Map the upload request and S3 results to DB column values."""
-    metadata = request.metadata or {}
-    artifacts = list(uploaded_artifacts)
-    model_artifact = artifacts[0] if artifacts else None
-    log_artifact = next(
-        (artifact for artifact in artifacts if "log" in artifact["artifact_name"].lower()),
-        None,
-    )
-
-    if metadata.get("gb_size_of_model") is None and model_artifact and model_artifact.get("size_bytes"):
-        metadata["gb_size_of_model"] = round(model_artifact["size_bytes"] / (1024**3), 4)
-
-    return {
-        "repo_id": request.model_id,
-        "model_url": request.model_url,
-        "date_time_entered_to_db": datetime.now(timezone.utc).isoformat(),
-        "likes": metadata.get("likes"),
-        "downloads": metadata.get("downloads"),
-        "license": metadata.get("license"),
-        "github_link": request.code_repository or metadata.get("github_link"),
-        "github_numContributors": metadata.get("github_numContributors"),
-        "base_models_modelID": metadata.get("base_models_modelID"),
-        "base_model_urls": metadata.get("base_model_urls"),
-        "parameter_number": metadata.get("parameter_number"),
-        "gb_size_of_model": metadata.get("gb_size_of_model"),
-        "dataset_link": request.dataset_link or metadata.get("dataset_link"),
-        "dataset_name": request.dataset_name or metadata.get("dataset_name"),
-        "s3_location_of_model_zip": (
-            f"s3://{model_artifact['bucket']}/{model_artifact['key']}" if model_artifact else None
-        ),
-        "s3_location_of_cloudwatch_log_for_database_entry": (
-            f"s3://{log_artifact['bucket']}/{log_artifact['key']}" if log_artifact else None
-        ),
-    }
-
-
-def _insert_model_record(rds_config: RDSConfig, params: Dict[str, Any]) -> None:
-    """Insert a new model record into the registry."""
-    rds_client = _get_rds_client()
-    columns = ", ".join(params.keys())
-    placeholders = ", ".join(f":{name}" for name in params.keys())
-    sql = f"INSERT INTO {rds_config.table_name} ({columns}) VALUES ({placeholders})"
-
-    rds_client.execute_statement(
-        resourceArn=rds_config.cluster_arn,
-        secretArn=rds_config.secret_arn,
-        database=rds_config.database,
-        sql=sql,
-        parameters=[
-            {"name": key, "value": _to_rds_value(value)}
-            for key, value in params.items()
-        ],
-    )
-
-
-def _update_model_record(rds_config: RDSConfig, params: Dict[str, Any]) -> None:
-    """Update an existing model record in the registry."""
-    rds_client = _get_rds_client()
-    assignments = ", ".join(f"{key} = :{key}" for key in params.keys() if key != "repo_id")
-    sql = (
-        f"UPDATE {rds_config.table_name} SET {assignments} "
-        "WHERE repo_id = :repo_id"
-    )
-
-    rds_client.execute_statement(
-        resourceArn=rds_config.cluster_arn,
-        secretArn=rds_config.secret_arn,
-        database=rds_config.database,
-        sql=sql,
-        parameters=[
-            {"name": key, "value": _to_rds_value(value)}
-            for key, value in params.items()
-        ],
-    )
-
-
-def _to_rds_value(value: Any) -> Dict[str, Any]:
-    """Convert a Python value into an RDS Data API field representation."""
-    if value is None:
-        return {"isNull": True}
-    if isinstance(value, bool):
-        return {"booleanValue": value}
-    if isinstance(value, int):
-        return {"longValue": value}
-    if isinstance(value, float):
-        return {"doubleValue": value}
-    return {"stringValue": str(value)}
-
-
 def _format_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
     """Create a standard Lambda proxy response."""
     return {
@@ -559,19 +596,23 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         request = UploadRequest.from_event(event)
 
         bucket_name = _require_env("MODEL_BUCKET_NAME")
-        rds_config = _load_rds_config()
+        artifact_type = _extract_artifact_type(event)
+        table = _get_artifacts_table()
 
         uploaded_artifacts = _upload_artifacts(request, bucket_name)
-        db_params = _build_db_parameters(request, uploaded_artifacts)
+        key = _build_dynamo_key(artifact_type, request.model_id)
+        existing = _fetch_existing_item(table, key)
 
-        if _record_exists(rds_config, request.model_id):
-            LOGGER.info("Model %s already exists; updating record.", request.model_id)
-            _update_model_record(rds_config, db_params)
-            action = "updated"
-        else:
-            LOGGER.info("Model %s is new; inserting record.", request.model_id)
-            _insert_model_record(rds_config, db_params)
-            action = "created"
+        item = _build_ddb_item(request, uploaded_artifacts, artifact_type, existing)
+        try:
+            table.put_item(Item=item)
+        except ClientError as exc:
+            LOGGER.error("Failed to write artifact metadata to DynamoDB: %s", exc, exc_info=True)
+            return _format_response(
+                502, {"status": "error", "message": "Failed to store artifact metadata"}
+            )
+
+        action = "updated" if existing else "created"
 
         queued_scoring_job = _enqueue_scoring_job(request)
 

@@ -46,3 +46,11 @@ omit = [
     "tests/*",
     "venv/*"
 ]
+
+[tool.pytest.ini_options]
+python_files = [
+    "tests/test_*.py"
+]
+testpaths = [
+    "tests"
+]
