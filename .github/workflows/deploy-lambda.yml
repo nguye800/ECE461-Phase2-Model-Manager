@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main  # Deploy when code is merged to main
-      - rate_dev
+      - upload_dev
 
 permissions:
   id-token: write      # needed for OIDC
