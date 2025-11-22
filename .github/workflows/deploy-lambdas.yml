@@ -93,15 +93,15 @@ jobs:
           docker push ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${METADATA_IMAGE_TAG}
 
       # Uncomment once the Upload Lambda exists and you want automatic deployments
-      # - name: Update upload Lambda image
-      #   run: |
-      #     aws lambda update-function-code \
-      #       --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }} \
-      #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
+      - name: Update upload Lambda image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
 
       # Uncomment once the Metadata Lambda exists and you want automatic deployments
-      # - name: Update metadata Lambda image
-      #   run: |
-      #     aws lambda update-function-code \
-      #       --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }} \
-      #       --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
+      - name: Update metadata Lambda image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
