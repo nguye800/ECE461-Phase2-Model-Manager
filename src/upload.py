@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 import zipfile
 
 import boto3
@@ -34,6 +35,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
+
+DEFAULT_SCORING_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/965919626283/enqueue-rate"
 
 _S3_CLIENT: Optional[boto3.client] = None
 _SQS_CLIENT: Optional[boto3.client] = None
@@ -191,21 +194,66 @@ def _resolve_dataset_url(request: UploadRequest) -> Optional[str]:
     return request.dataset_link or metadata.get("dataset_link") or metadata.get("dataset_url")
 
 
-def _model_ready_for_scoring(request: UploadRequest) -> bool:
+def _is_valid_url(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _model_ready_for_scoring(
+    model_url: Optional[str], codebase_url: Optional[str], dataset_url: Optional[str]
+) -> bool:
     """A model is ready for scoring when URLs for model, code, and data exist."""
-    return bool(
-        request.model_url and _resolve_codebase_url(request) and _resolve_dataset_url(request)
-    )
+    return all(_is_valid_url(url) for url in (model_url, codebase_url, dataset_url))
 
 
-def _enqueue_scoring_job(request: UploadRequest) -> bool:
+def _collect_scoring_urls(item: Dict[str, Any], request: UploadRequest) -> Optional[Dict[str, str]]:
+    dataset = item.get("dataset") or {}
+    codebase = item.get("codebase") or {}
+    model_url = item.get("model_url") or request.model_url
+    codebase_url = codebase.get("url") or _resolve_codebase_url(request)
+    dataset_url = dataset.get("url") or _resolve_dataset_url(request)
+
+    if _model_ready_for_scoring(model_url, codebase_url, dataset_url):
+        return {
+            "model_url": model_url,
+            "codebase_url": codebase_url,
+            "dataset_url": dataset_url,
+        }
+    return None
+
+
+def _enqueue_scoring_job(model_id: str, urls: Dict[str, str]) -> bool:
     """
-    If the model has the required artifacts, enqueue a scoring job on SQS.
-    Returns True when a message was successfully queued.
+    Enqueue a scoring job on SQS. Returns True when a message was queued.
     """
-    queue_url = os.getenv("SCORING_QUEUE_URL")
+    queue_url = os.getenv("SCORING_QUEUE_URL", DEFAULT_SCORING_QUEUE_URL)
     if not queue_url:
         LOGGER.debug("SCORING_QUEUE_URL not set; skipping scoring enqueue.")
+        return False
+
+    message_body = json.dumps(
+        {
+            "model_id": model_id,
+            "model_url": urls["model_url"],
+            "codebase_url": urls["codebase_url"],
+            "dataset_url": urls["dataset_url"],
+            "queued_at": datetime.utcnow().isoformat(),
+        }
+    )
+
+    try:
+        sqs_client = _get_sqs_client()
+        sqs_client.send_message(QueueUrl=queue_url, MessageBody=message_body)
+        LOGGER.info("Queued scoring job for model %s", model_id)
+        return True
+    except (BotoCoreError, ClientError) as exc:
+        LOGGER.warning(
+            "Failed to enqueue scoring job for model %s: %s",
+            model_id,
+            exc,
+        )
         return False
 
 
@@ -372,36 +420,6 @@ def _fetch_existing_item(table, key: Dict[str, str]) -> Optional[Dict[str, Any]]
         LOGGER.exception("Failed to read existing artifact record from DynamoDB")
         raise UploadError("Unable to access artifact metadata store")
     return response.get("Item")
-
-    if not _model_ready_for_scoring(request):
-        LOGGER.info(
-            "Model %s missing URLs required for scoring; skipping queue.",
-            request.model_id,
-        )
-        return False
-
-    message_body = json.dumps(
-        {
-            "model_id": request.model_id,
-            "model_url": request.model_url,
-            "codebase_url": _resolve_codebase_url(request),
-            "dataset_url": _resolve_dataset_url(request),
-            "queued_at": datetime.utcnow().isoformat(),
-        }
-    )
-
-    try:
-        sqs_client = _get_sqs_client()
-        sqs_client.send_message(QueueUrl=queue_url, MessageBody=message_body)
-        LOGGER.info("Queued scoring job for model %s", request.model_id)
-        return True
-    except (BotoCoreError, ClientError) as exc:
-        LOGGER.warning(
-            "Failed to enqueue scoring job for model %s: %s",
-            request.model_id,
-            exc,
-        )
-        return False
 
 
 def _upload_artifacts(request: UploadRequest, bucket: str) -> List[Dict[str, Any]]:
@@ -604,6 +622,7 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         existing = _fetch_existing_item(table, key)
 
         item = _build_ddb_item(request, uploaded_artifacts, artifact_type, existing)
+        scoring_urls = _collect_scoring_urls(item, request)
         try:
             table.put_item(Item=item)
         except ClientError as exc:
@@ -614,7 +633,9 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         action = "updated" if existing else "created"
 
-        queued_scoring_job = _enqueue_scoring_job(request)
+        queued_scoring_job = False
+        if scoring_urls:
+            queued_scoring_job = _enqueue_scoring_job(request.model_id, scoring_urls)
 
         response_body = {
             "status": "success",
