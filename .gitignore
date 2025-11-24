@@ -19,3 +19,5 @@ venv/
 .coverage
 srclocal_storage
 models.db
+run-env/
+demo-model.zip

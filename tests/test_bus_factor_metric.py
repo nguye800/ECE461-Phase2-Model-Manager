@@ -1,4 +1,9 @@
+import json
 import unittest
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 from src.metrics.bus_factor import *  # pyright: ignore[reportWildcardImportFromLibrary]
 from src.metric import ModelURLs
 
@@ -171,3 +176,129 @@ class TestBustFactor(unittest.TestCase):
             ),
             0.416666667,
         )
+
+
+class TestBusFactorUnit(unittest.TestCase):
+    def setUp(self):
+        self.metric = BusFactorMetric()
+
+    def test_get_response_validates_url(self):
+        with self.assertRaises(ValueError):
+            self.metric.get_response("not a github url")
+
+    def test_get_response_requires_token(self):
+        with patch("src.metrics.bus_factor.os.getenv", return_value=None):
+            with self.assertRaises(ValueError):
+                self.metric.get_response("https://github.com/owner/repo")
+
+    @patch("src.metrics.bus_factor.requests.post")
+    def test_get_response_handles_request_errors(self, mock_post):
+        mock_post.side_effect = requests.exceptions.RequestException("boom")
+        with patch("src.metrics.bus_factor.os.getenv", return_value="token"):
+            with self.assertRaises(ValueError):
+                self.metric.get_response("https://github.com/owner/repo")
+
+    @patch("src.metrics.bus_factor.requests.post")
+    def test_get_response_success(self, mock_post):
+        fake_response = MagicMock()
+        mock_post.return_value = fake_response
+        with patch("src.metrics.bus_factor.os.getenv", return_value="token"):
+            self.metric.get_response("https://github.com/owner/repo")
+        self.assertIs(self.metric.response, fake_response)
+        mock_post.assert_called_once()
+
+    def test_parse_response_without_payload(self):
+        total, scores = self.metric.parse_response()
+        self.assertEqual(total, 0)
+        self.assertEqual(scores, {})
+
+    def test_parse_response_invalid_json(self):
+        self.metric.response = SimpleNamespace(text="not-json")
+        with self.assertRaises(ValueError):
+            self.metric.parse_response()
+
+    def test_parse_response_graphql_errors(self):
+        payload = {"errors": [{"message": "nope"}]}
+        self.metric.response = SimpleNamespace(text=json.dumps(payload))
+        with self.assertRaises(ValueError):
+            self.metric.parse_response()
+
+    def test_parse_response_success(self):
+        payload = {
+            "data": {
+                "repository": {
+                    "refs": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "target": {
+                                        "history": {
+                                            "edges": [
+                                                {"node": {"author": {"email": "a@x"}}},
+                                                {"node": {"author": {"email": "b@x"}}},
+                                                {"node": {"author": {"email": "a@x"}}},
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        self.metric.response = SimpleNamespace(text=json.dumps(payload))
+        total, scores = self.metric.parse_response()
+        self.assertEqual(total, 3)
+        self.assertEqual(scores["a@x"], 2)
+        self.assertEqual(scores["b@x"], 1)
+
+    @patch("src.metrics.bus_factor.list_repo_commits")
+    def test_parse_model_handles_errors(self, mock_list_commits):
+        mock_list_commits.side_effect = RuntimeError("boom")
+        self.metric.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        total, scores = self.metric.parse_model()
+        self.assertEqual(total, 0)
+        self.assertEqual(scores, {})
+
+    @patch("src.metrics.bus_factor.list_repo_commits")
+    def test_parse_model_counts_recent_commits(self, mock_list_commits):
+        class Commit:
+            def __init__(self, ts, authors):
+                self.created_at = ts
+                self.authors = authors
+
+        recent = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        older = datetime(2019, 1, 1, tzinfo=timezone.utc)
+        mock_list_commits.return_value = [
+            Commit(recent, ["a", "b"]),
+            Commit(older, ["c"]),
+        ]
+        self.metric.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        total, scores = self.metric.parse_model()
+        self.assertEqual(total, 1)
+        self.assertEqual(scores, {"a": 1, "b": 1})
+
+    def test_calc_weighted_sum_edge_cases(self):
+        self.assertEqual(self.metric.calc_weighted_sum(0, 0, 0.5, 0.5), 0.0)
+        self.assertEqual(self.metric.calc_weighted_sum(0, 5, 0.5, 0.7), 0.7)
+        self.assertEqual(self.metric.calc_weighted_sum(3, 0, 0.6, 0.4), 0.6)
+
+    @patch("src.metrics.bus_factor.requests.post")
+    def test_setup_resources_without_codebase(self, mock_post):
+        metric = BusFactorMetric()
+        metric.set_url(ModelURLs(model="https://huggingface.co/model"))
+        metric.setup_resources()
+        self.assertIsNone(metric.response)
+        mock_post.assert_not_called()
+
+    @patch("src.metrics.bus_factor.requests.post")
+    def test_setup_resources_with_codebase(self, mock_post):
+        fake_resp = MagicMock()
+        mock_post.return_value = fake_resp
+        metric = BusFactorMetric()
+        urls = ModelURLs(model="https://huggingface.co/model", codebase="https://github.com/owner/repo")
+        metric.set_url(urls)
+        with patch("src.metrics.bus_factor.os.getenv", return_value="token"):
+            metric.setup_resources()
+        self.assertIs(metric.response, fake_resp)

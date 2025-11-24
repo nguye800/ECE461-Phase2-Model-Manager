@@ -6,6 +6,13 @@ from types import SimpleNamespace
 import tempfile
 import subprocess
 import sys
+import boto3, os, json, re, tempfile, subprocess, sys
+from dotenv import load_dotenv
+
+BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-sonnet-20240229-v1:0")
+
+brt = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 
 huggingface_pattern = re.compile(r"(?:https?://)?(?:www\.)?huggingface\.co/([^/]+)/([^/]+)/?$")
 
@@ -102,61 +109,67 @@ class ReproducibilityMetric(BaseMetric):
 
     def _use_llm_to_debug(self, code_snippet, error_message):
         """
-        Use GENAI_STUDIO to attempt to fix code that doesn't run.
+        Use AWS Bedrock (Claude Sonnet) to attempt to fix code that doesn't run.
         Returns: (fixed_code, success_bool)
-        **In integration change to use bedrock**
         """
         load_dotenv()
-        api_key = os.environ.get("GEN_AI_STUDIO_API_KEY")
-        if not api_key:
-            raise RuntimeError("Missing GENAI_STUDIO_TOKEN environment variable")
-        
-        prompt = f"""The following code snippet from a HuggingFace model card failed to run:
-        ```python
-        {code_snippet}
-        ```
 
-        Error message (if any):
-        {error_message}
-
-        Please fix this code so it runs successfully. Common issues include:
-        - Missing imports
-        - Undefined variables
-        - API keys or model loading issues
-        - Syntax errors
-
-        Provide ONLY the corrected Python code in your response, with no explanation or markdown formatting."""
+        prompt = (
+            "The following Python code snippet from a HuggingFace model card failed to run.\n"
+            "Return ONLY the corrected Python code with no explanations and no markdown fences.\n\n"
+            "Code:\n"
+            "```python\n" + str(code_snippet) + "\n```\n\n"
+            "Error (if any):\n" + str(error_message)
+        )
 
         try:
-            url = "https://genai.rcac.purdue.edu/api/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
+            # Prepare Anthropic Claude request payload for invoke_model
             body = {
-                "model": "llama3.1:latest",
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 2000,
+                "temperature": 0.0,
                 "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-                ],
-                "stream": False
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt}
+                        ]
+                    }
+                ]
             }
-            response = requests.post(url, headers=headers, json=body)
-            fixed_code = response.text.strip()
-            
-            # Remove markdown code blocks if LLM added them
+
+            res = brt.invoke_model(
+                modelId=BEDROCK_MODEL_ID,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body)
+            )
+
+            # Body is a streaming payload; read and parse JSON
+            raw = res.get("body")
+            payload = json.loads(raw.read().decode("utf-8")) if hasattr(raw, "read") else json.loads(raw)
+
+            # Extract text segments from Anthropic response content
+            content = payload.get("content", [])
+            text_parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+            fixed_code = "\n".join([t for t in text_parts if t]).strip()
+
+            # If the model still returned fenced code, strip fences
             if fixed_code.startswith("```"):
-                lines = fixed_code.split('\n')
-                fixed_code = '\n'.join(lines[1:-1]) if len(lines) > 2 else fixed_code
-            
+                lines = fixed_code.split("\n")
+                # Remove first and last fence if present
+                if len(lines) >= 2 and lines[0].startswith("```"):
+                    core = lines[1:]
+                    if core and core[-1].startswith("```"):
+                        core = core[:-1]
+                    fixed_code = "\n".join(core)
+
             # Test the fixed code
             result = self._test_code_execution(fixed_code)
             return fixed_code, result == 'success'
-            
+
         except Exception as e:
-            print(f"LLM debugging error: {e}")
+            print(f"LLM debugging error (Bedrock): {e}")
             return None, False
 
     def setup_resources(self, debug=False):
@@ -284,7 +297,7 @@ class ReproducibilityMetric(BaseMetric):
         return 0.0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     load_dotenv()
     
     if os.getenv("GEN_AI_STUDIO_API_KEY") is None:

@@ -1,7 +1,11 @@
+import io
+import json
+import subprocess
 import unittest
-from unittest.mock import patch, MagicMock
-from src.metrics.reproducibility import ReproducibilityMetric
+from unittest.mock import MagicMock, patch
+
 from src.metric import ModelURLs
+from src.metrics.reproducibility import ReproducibilityMetric
 
 class TestReproducibilityMetric(unittest.TestCase):
     metric_instance: ReproducibilityMetric
@@ -345,54 +349,70 @@ pip install torch
 
     # LLM debugging tests
 
-    @patch('src.metrics.reproducibility.requests.post')
-    def test_llm_debug_success(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.text = "print('Fixed code')"
-        mock_post.return_value = mock_response
+    @patch('src.metrics.reproducibility.brt.invoke_model')
+    def test_llm_debug_success(self, mock_invoke):
+        body_payload = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "print('Fixed code')"}
+            ]
+        }
+        mock_invoke.return_value = {"body": MagicMock(read=MagicMock(return_value=json.dumps(body_payload).encode("utf-8")))}
 
-        with patch.dict('os.environ', {'GEN_AI_STUDIO_API_KEY': 'fake_key'}):
-            with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
-                fixed_code, success = self.metric_instance._use_llm_to_debug(
-                    "print('broken code')", 
-                    "SyntaxError"
-                )
-                self.assertTrue(success)
-                self.assertIsNotNone(fixed_code)
+        with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
+            fixed_code, success = self.metric_instance._use_llm_to_debug(
+                "print('broken code')",
+                "SyntaxError"
+            )
+            self.assertTrue(success)
+            self.assertIsNotNone(fixed_code)
 
-    @patch('src.metrics.reproducibility.requests.post')
-    def test_llm_debug_failure(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.text = "print('Still broken')"
-        mock_post.return_value = mock_response
+    @patch('src.metrics.reproducibility.brt.invoke_model')
+    def test_llm_debug_failure(self, mock_invoke):
+        body_payload = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "print('Still broken')"}
+            ]
+        }
+        mock_invoke.return_value = {"body": MagicMock(read=MagicMock(return_value=json.dumps(body_payload).encode("utf-8")))}
 
-        with patch.dict('os.environ', {'GEN_AI_STUDIO_API_KEY': 'fake_key'}):
-            with patch.object(self.metric_instance, '_test_code_execution', return_value='failure'):
-                fixed_code, success = self.metric_instance._use_llm_to_debug(
-                    "print('broken code')", 
-                    "SyntaxError"
-                )
-                self.assertFalse(success)
+        with patch.object(self.metric_instance, '_test_code_execution', return_value='failure'):
+            fixed_code, success = self.metric_instance._use_llm_to_debug(
+                "print('broken code')",
+                "SyntaxError"
+            )
+            self.assertFalse(success)
 
-    def test_llm_debug_missing_api_key(self):
-        with patch.dict('os.environ', {}, clear=True):
-            with self.assertRaises(RuntimeError):
-                self.metric_instance._use_llm_to_debug("code", "error")
+    def test_llm_debug_bedrock_exception(self):
+        with patch('src.metrics.reproducibility.brt.invoke_model', side_effect=Exception("Bedrock error")):
+            fixed_code, success = self.metric_instance._use_llm_to_debug("code", "error")
+            self.assertFalse(success)
+            self.assertIsNone(fixed_code)
 
-    @patch('src.metrics.reproducibility.requests.post')
-    def test_llm_debug_removes_markdown(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.text = "```python\nprint('Hello')\n```"
-        mock_post.return_value = mock_response
+    @patch('src.metrics.reproducibility.brt.invoke_model')
+    def test_llm_debug_removes_markdown(self, mock_invoke):
+        body_payload = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "```python\nprint('Hello')\n```"}
+            ]
+        }
+        mock_invoke.return_value = {"body": MagicMock(read=MagicMock(return_value=json.dumps(body_payload).encode("utf-8")))}
 
-        with patch.dict('os.environ', {'GEN_AI_STUDIO_API_KEY': 'fake_key'}):
-            with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
-                fixed_code, success = self.metric_instance._use_llm_to_debug(
-                    "broken", 
-                    "error"
-                )
-                self.assertNotIn("```", fixed_code)
-                self.assertIn("print('Hello')", fixed_code)
+        with patch.object(self.metric_instance, '_test_code_execution', return_value='success'):
+            fixed_code, success = self.metric_instance._use_llm_to_debug(
+                "broken",
+                "error"
+            )
+            self.assertNotIn("```", fixed_code)
+            self.assertIn("print('Hello')", fixed_code)
 
     # Integration tests with mocking
 
@@ -433,6 +453,121 @@ print('Hello, World!')
         
         self.assertTrue(self.metric_instance.response["has_model_card"])
         self.assertEqual(self.metric_instance.response["code_snippets_found"], 0)
+
+    @patch("builtins.print")
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value=None)
+    @patch.object(ReproducibilityMetric, "_get_owner_model", return_value=("owner", "model"))
+    def test_setup_resources_debug_no_model_card(self, mock_owner, mock_card, mock_print):
+        self.metric_instance.setup_resources(debug=True)
+        self.assertFalse(self.metric_instance.response["has_model_card"])
+
+    @patch("builtins.print")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=[])
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="content")
+    @patch.object(ReproducibilityMetric, "_get_owner_model", return_value=("owner", "model"))
+    def test_setup_resources_debug_no_snippets(self, mock_owner, mock_card, mock_extract, mock_print):
+        self.metric_instance.setup_resources(debug=True)
+        self.assertEqual(self.metric_instance.response["code_snippets_found"], 0)
+
+    @patch("builtins.print")
+    @patch.object(ReproducibilityMetric, "_use_llm_to_debug", return_value=("print('hi')", False))
+    @patch.object(ReproducibilityMetric, "_test_code_execution", return_value="failure")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=["print('hi')"])
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="content")
+    @patch.object(ReproducibilityMetric, "_get_owner_model", return_value=("owner", "model"))
+    def test_setup_resources_debug_loop(self, mock_owner, mock_card, mock_extract, mock_test, mock_debug, mock_print):
+        self.metric_instance.setup_resources(debug=True)
+        result = self.metric_instance.response["execution_results"][0]
+        self.assertEqual(result["final_result"], "failure_after_debug")
+
+    def test_test_code_execution_success_and_failure(self):
+        self.assertEqual(self.metric_instance._test_code_execution("print('ok')"), "success")
+        self.assertEqual(self.metric_instance._test_code_execution("raise ValueError"), "failure")
+
+    @patch("src.metrics.reproducibility.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="python", timeout=1))
+    def test_test_code_execution_timeout(self, mock_run):
+        result = self.metric_instance._test_code_execution("print('slow')")
+        self.assertEqual(result, "timeout")
+
+    @patch("src.metrics.reproducibility.subprocess.run", side_effect=RuntimeError("boom"))
+    def test_test_code_execution_error(self, mock_run):
+        result = self.metric_instance._test_code_execution("print('err')")
+        self.assertEqual(result, "error")
+
+    @patch("src.metrics.reproducibility.brt.invoke_model")
+    def test_use_llm_to_debug_handles_exception(self, mock_invoke):
+        mock_invoke.side_effect = Exception("boom")
+        fixed, success = self.metric_instance._use_llm_to_debug("code", "err")
+        self.assertIsNone(fixed)
+        self.assertFalse(success)
+
+    def test_setup_resources_without_url(self):
+        self.metric_instance.set_url(ModelURLs(model=None))
+        self.metric_instance.setup_resources()
+        self.assertIsNone(self.metric_instance.response)
+
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value=None)
+    def test_setup_resources_missing_model_card(self, mock_card):
+        self.metric_instance.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        self.metric_instance.setup_resources()
+        self.assertFalse(self.metric_instance.response["has_model_card"])
+
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="```python\nprint('hi')\n```")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=["print('hi')"])
+    @patch.object(ReproducibilityMetric, "_test_code_execution", return_value="success")
+    def test_setup_resources_records_success(self, mock_test, mock_extract, mock_card):
+        self.metric_instance.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        self.metric_instance.setup_resources()
+        self.assertEqual(self.metric_instance.response["code_snippets_found"], 1)
+        self.assertTrue(self.metric_instance.response["execution_results"][0]["runs_without_changes"])
+
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="```python\nprint('hi')\n```")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=["print('hi')"])
+    @patch.object(ReproducibilityMetric, "_test_code_execution", return_value="failure")
+    @patch.object(ReproducibilityMetric, "_use_llm_to_debug", return_value=("print('fixed')", True))
+    def test_setup_resources_records_debugging(self, mock_debug, mock_test, mock_extract, mock_card):
+        self.metric_instance.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        self.metric_instance.setup_resources()
+        result = self.metric_instance.response["execution_results"][0]
+        self.assertTrue(result["runs_with_debugging"])
+        self.assertEqual(result["final_result"], "success_after_debug")
+
+    @patch.object(ReproducibilityMetric, "_fetch_model_card", return_value="```python\nprint('hi')\n```")
+    @patch.object(ReproducibilityMetric, "_extract_code_snippets", return_value=["print('hi')"])
+    @patch.object(ReproducibilityMetric, "_test_code_execution", return_value="failure")
+    @patch.object(ReproducibilityMetric, "_use_llm_to_debug", return_value=(None, False))
+    def test_setup_resources_records_debug_failure(self, mock_debug, mock_test, mock_extract, mock_card):
+        self.metric_instance.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        self.metric_instance.setup_resources()
+        result = self.metric_instance.response["execution_results"][0]
+        self.assertFalse(result["runs_with_debugging"])
+        self.assertEqual(result["final_result"], "failure_after_debug")
+
+    def test_calculate_score_paths(self):
+        metric = self.metric_instance
+        metric.set_url(ModelURLs(model=None))
+        self.assertEqual(metric.calculate_score(), -1.0)
+
+        metric.set_url(ModelURLs(model="https://huggingface.co/owner/model"))
+        metric.response = {"has_model_card": False}
+        self.assertEqual(metric.calculate_score(), 0.0)
+
+        metric.response = {"has_model_card": True, "code_snippets_found": 0}
+        self.assertEqual(metric.calculate_score(), 0.0)
+
+        metric.response = {
+            "has_model_card": True,
+            "code_snippets_found": 1,
+            "execution_results": [{"runs_without_changes": True, "runs_with_debugging": False}],
+        }
+        self.assertEqual(metric.calculate_score(), 1.0)
+
+        metric.response = {
+            "has_model_card": True,
+            "code_snippets_found": 1,
+            "execution_results": [{"runs_without_changes": False, "runs_with_debugging": True}],
+        }
+        self.assertEqual(metric.calculate_score(), 0.5)
 
 
 if __name__ == "__main__":

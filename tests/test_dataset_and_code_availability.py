@@ -1,7 +1,12 @@
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import requests
+
 from src.metrics.dataset_and_code import *
-from unittest.mock import MagicMock
-from src.metric import ModelURLs
+from src.metric import ModelPaths, ModelURLs
 
 
 class MockPath:
@@ -58,19 +63,20 @@ class TestDatasetAndCodeScoreMetric(unittest.TestCase):
         self.assertAlmostEqual(score, expected_score, places=2)
 
     def test_score_calculation_working_urls(self):
-        test_cases = [
-            ("https://example.com", 0.3),
-            ("https://example.com", 0.3),
-        ]
-        for url, expected_score in test_cases:
-            metric = DatasetAndCodeScoreMetric()
-            urls = ModelURLs(model="shouldn't matter")
-            urls.dataset = url
-            urls.codebase = None
-            metric.set_url(urls)
-            metric.readme_file = MockPath(exists=False)
+        metric = DatasetAndCodeScoreMetric()
+        urls = ModelURLs(model="shouldn't matter", dataset="https://datasets", codebase="https://code")
+        metric.set_url(urls)
+        metric.readme_file = MockPath("", exists=False)
+        with patch("src.metrics.dataset_and_code.requests.head") as mock_head, patch(
+            "src.metrics.dataset_and_code.requests.get"
+        ) as mock_get:
+            mock_head.side_effect = [
+                MagicMock(status_code=200),  # dataset head
+                MagicMock(status_code=200),  # code head
+            ]
+            mock_get.return_value = MagicMock(text="Dataset description available here.")
             score = metric.calculate_score()
-            self.assertAlmostEqual(score, expected_score, places=2)
+        self.assertAlmostEqual(score, 0.8, places=2)
 
     def test_documentation_scoring_logic(self):
 
@@ -92,3 +98,46 @@ class TestDatasetAndCodeScoreMetric(unittest.TestCase):
             self.metric.readme_file = MockPath(readme_content)
             score = self.metric.calculate_score()
             self.assertAlmostEqual(score, expected_doc_score, places=2)
+
+    def test_setup_resources_requires_local_directory(self):
+        metric = DatasetAndCodeScoreMetric()
+        with self.assertRaises(ValueError):
+            metric.setup_resources()
+
+    @patch("src.metrics.dataset_and_code.requests.head")
+    def test_calculate_score_handles_head_exception(self, mock_head):
+        mock_head.side_effect = requests.RequestException("boom")
+        metric = DatasetAndCodeScoreMetric()
+        urls = ModelURLs(model="x", dataset="https://datasets")
+        metric.set_url(urls)
+        metric.readme_file = MockPath("")
+        score = metric.calculate_score()
+        self.assertEqual(score, 0.0)
+
+    @patch("src.metrics.dataset_and_code.requests.head")
+    def test_code_head_exception(self, mock_head):
+        mock_head.side_effect = requests.RequestException("boom")
+        metric = DatasetAndCodeScoreMetric()
+        urls = ModelURLs(model="x", codebase="https://github.com/test/repo")
+        metric.set_url(urls)
+        metric.readme_file = MockPath("")
+        score = metric.calculate_score()
+        self.assertEqual(score, 0.0)
+
+    @patch("src.metrics.dataset_and_code.requests.get")
+    def test_calculate_score_handles_get_exception(self, mock_get):
+        mock_get.side_effect = requests.RequestException("boom")
+        metric = DatasetAndCodeScoreMetric()
+        urls = ModelURLs(model="x", dataset="https://datasets")
+        metric.set_url(urls)
+        metric.readme_file = MockPath("dataset usage example requirements limitations")
+        score = metric.calculate_score()
+        self.assertAlmostEqual(score, 0.2, places=2)
+
+    def test_setup_resources_sets_paths(self):
+        metric = DatasetAndCodeScoreMetric()
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = ModelPaths(model=tmp)
+            metric.set_local_directory(paths)
+            metric.setup_resources()
+            self.assertEqual(metric.readme_file, Path(tmp) / "README.md")

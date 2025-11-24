@@ -58,11 +58,37 @@ with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
     coverage_data = cov.get_data()
     measured_files = coverage_data.measured_files()
     logging.debug(f"Files measured for coverage: {len(measured_files)}")
+
+    per_file_rows = []
     for filename in measured_files:
-        logging.debug(f"Measured file: {filename}")
+        path_obj = Path(filename)
+        if src_path not in path_obj.parents and path_obj != src_path:
+            continue  # only report files under src/
+        try:
+            filename, statements, excluded, missing, _ = cov.analysis2(filename)
+        except coverage.CoverageException:
+            continue
+        total = len(statements)
+        if total == 0:
+            continue
+        missing_count = len(missing)
+        covered = total - missing_count
+        percent = (covered / total) * 100 if total else 100.0
+        rel_path = path_obj.relative_to(project_root)
+        per_file_rows.append((str(rel_path), percent, covered, total))
+        logging.debug(
+            f"Measured file: {rel_path} ({covered}/{total} lines, {percent:.1f}%)"
+        )
 
 # Summary
 passed_tests = total_tests - len(result.failures) - len(result.errors)
 print(f"{passed_tests}/{total_tests} test cases passed. {coverage_percent:.0f}% line coverage achieved.")
+
+if per_file_rows:
+    print("\nPer-file coverage (src/):")
+    max_name = max(len(row[0]) for row in per_file_rows)
+    for name, percent, covered, total in sorted(per_file_rows):
+        print(f"{name.ljust(max_name)}  {percent:6.1f}% ({covered}/{total})")
+
 
 sys.exit(0)

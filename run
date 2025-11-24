@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-python3 -m venv venv
+# python3 -m venv venv
+python -m venv venv
 # shellcheck disable=SC1091
-source venv/bin/activate
+# source venv/bin/activate
+source venv/Scripts/activate
 
 if [[ $1 == "install" ]]
 then
@@ -9,7 +11,9 @@ then
     poetry install
 elif [[ $1 == "test" ]]
 then
-    python3 test_runner.py
+    # python3 test_runner.py
+    python test_runner.py
 else
-    python3 src/__main__.py analyze "$1"
+    # python3 src/__main__.py analyze "$1"
+    python src/__main__.py analyze "$1"
 fi

@@ -1,0 +1,121 @@
+# DynamoDB item (put_item)
+{
+  "pk": { "S": "MODEL#01JBM6A4F9R0G7YX2Q3MZK1N7P" },
+  "sk": { "S": "META" },
+  "type": { "S": "MODEL" },
+  "model_id": { "S": "01JBM6A4F9R0G7YX2Q3MZK1N7P" },
+  "name": { "S": "AdapterHub/bert-base-uncased-pf-imdb" },
+  "name_lc": { "S": "adapterhub/bert-base-uncased-pf-imdb" },
+  "model_url": { "S": "https://huggingface.co/AdapterHub/bert-base-uncased-pf-imdb" },
+
+  "base_models": {
+    "L": [
+      {
+        "M": {
+          "model_id": { "S": "01J6ABCDEF4GHIJKLMNPRSTUVX" },
+          "model_url": { "S": "https://huggingface.co/google-bert/bert-base-uncased" },
+          "relation": { "S": "derived_from" },
+          "added_at": { "S": "2024-10-12T09:31:00Z" }
+        }
+      },
+      {
+        "M": {
+          "model_id": { "S": "01J6GHIJKL4MNOPQRSTUVXYZ12" },
+          "model_url": { "S": "https://huggingface.co/google-bert/bert-base-uncased" },
+          "relation": { "S": "fine_tuned_from" },
+          "added_at": { "S": "2025-01-05T18:20:11Z" }
+        }
+      }
+    ]
+  },
+
+  "dataset": {
+    "M": {
+      "url": { "S": "https://huggingface.co/datasets/stanfordnlp/imdb" },
+      "version": { "N": "1" },
+      "updated_at": { "S": "2025-11-08T23:24:39Z" }
+    }
+  },
+
+  "codebase": {
+    "M": {
+      "url": { "S": "https://github.com/adapter-hub/adapters" },
+      "version": { "N": "1" },
+      "updated_at": { "S": "2025-11-08T23:24:39Z" }
+    }
+  },
+
+  "assets": {
+    "M": {
+      "model_zip_key": { "S": "models/01JBM6A4F9R0G7YX2Q3MZK1N7P/artifacts/adapter-bert-base-uncased-imdb_pfeiffer-v1.zip" },
+      "model_zip_sha256": { "S": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" }
+    }
+  },
+
+  "metrics": {
+    "M": {
+      "average": { "N": "0" },
+      "evidence_coverage": { "N": "0" },
+      "breakdown": {
+        "M": {
+          "ramp_up_time": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "bus_factor": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "license": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "size_score": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "dataset_and_code": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "dataset_quality": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "code_quality": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "performance_claims": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "reproducibility": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "reviewedness": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } },
+          "tree_score": { "M": { "value": { "N": "0" }, "available": { "BOOL": false } } }
+        }
+      }
+    }
+  },
+
+  "scoring": {
+    "M": {
+      "status": { "S": "INITIAL" },
+      "last_scored_at": { "NULL": true },
+      "score_version": { "S": "v1" },
+      "scorer_build": { "NULL": true }
+    }
+  },
+
+  "eligibility": {
+    "M": {
+      "minimum_evidence_met": { "BOOL": false },
+      "reason": { "S": "Missing code and database" }
+    }
+  },
+
+  "approval": {
+    "M": {
+      "visible": { "BOOL": false },
+      "status": { "S": "PENDING" },
+      "reason": { "NULL": true }
+    }
+  },
+
+  "created_at": { "S": "2025-11-08T23:24:39Z" },
+  "updated_at": { "S": "2025-11-08T23:24:39Z" }
+}
+
+
+---
+
+# S3 manifest (what to upload)
+{
+  "bucket": "mf-registry-dev-us-east-1",
+  "region": "us-east-1",
+  "prefix": "models/01JBM6A4F9R0G7YX2Q3MZK1N7P/",
+  "objects": [
+    {
+      "key": "models/01JBM6A4F9R0G7YX2Q3MZK1N7P/artifacts/adapter-bert-base-uncased-imdb_pfeiffer-v1.zip",
+      "purpose": "adapter_weights_zip",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "content_type": "application/zip"
+    }
+  ]
+}

@@ -1,17 +1,19 @@
-import unittest
+﻿import unittest
 from pathlib import Path
 import tempfile
 import json
-import types
 
 from src.metrics.performance_claims import PerformanceClaimsMetric
 from src.config import ModelPaths
 
-class _StubResponse:
+
+class _StubBedrockClient:
     def __init__(self, payload):
         self._payload = payload
-    def json(self):
-        return self._payload
+
+    def invoke_model(self, **kwargs):
+        return {"body": json.dumps(self._payload)}
+
 
 class TestPerformanceClaimsMetric(unittest.TestCase):
     def setUp(self):
@@ -36,68 +38,76 @@ class TestPerformanceClaimsMetric(unittest.TestCase):
         score = self.metric.calculate_score()
         self.assertEqual(score, 0.0)
 
-    def test_calculate_score_parses_float_from_response(self):
-        # Create README with some plausible content
+    def test_calculate_score_parses_json_from_bedrock(self):
         (self.model_dir / "README.md").write_text(
-            "This model achieves 93.5% accuracy on CIFAR-10 and references arXiv:1234.5678.",
+            "Model achieves 93.5% accuracy on CIFAR-10 and references arXiv:1234.5678.",
             encoding="utf-8",
         )
         self.metric.setup_resources()
 
-        # Stub requests.post to return a valid-looking LLM response
         import src.metrics.performance_claims as perf_mod
-        original_post = perf_mod.requests.post
-        try:
-            payload = {
-                "choices": [
-                    {"message": {"content": "Final score: 0.73\n"}}
+        original_client = perf_mod.BEDROCK_CLIENT
+        perf_mod.BEDROCK_CLIENT = _StubBedrockClient(
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '{"score": 0.73, "explanation": "well documented"}',
+                    }
                 ]
             }
-            perf_mod.requests.post = lambda *a, **k: _StubResponse(payload)
+        )
+        try:
             score = self.metric.calculate_score()
-            self.assertIsInstance(score, float)
-            self.assertGreaterEqual(score, 0.0)
-            self.assertLessEqual(score, 1.0)
-            # Should match parsed float
             self.assertAlmostEqual(score, 0.73, places=6)
         finally:
-            perf_mod.requests.post = original_post
+            perf_mod.BEDROCK_CLIENT = original_client
 
     def test_calculate_score_handles_non_numeric_response(self):
         (self.model_dir / "README.md").write_text("Some content", encoding="utf-8")
         self.metric.setup_resources()
 
         import src.metrics.performance_claims as perf_mod
-        original_post = perf_mod.requests.post
+        original_client = perf_mod.BEDROCK_CLIENT
+        perf_mod.BEDROCK_CLIENT = _StubBedrockClient(
+            {"content": [{"type": "text", "text": "no numeric score present"}]}
+        )
         try:
-            payload = {
-                "choices": [
-                    {"message": {"content": "no numeric score present"}}
-                ]
-            }
-            perf_mod.requests.post = lambda *a, **k: _StubResponse(payload)
             score = self.metric.calculate_score()
             self.assertEqual(score, 0.0)
         finally:
-            perf_mod.requests.post = original_post
+            perf_mod.BEDROCK_CLIENT = original_client
 
     def test_calculate_score_uses_last_float_when_multiple_present(self):
         (self.model_dir / "README.md").write_text("Content", encoding="utf-8")
         self.metric.setup_resources()
 
         import src.metrics.performance_claims as perf_mod
-        original_post = perf_mod.requests.post
+        original_client = perf_mod.BEDROCK_CLIENT
+        perf_mod.BEDROCK_CLIENT = _StubBedrockClient(
+            {"content": [{"type": "text", "text": "intermediate 0.12 final 0.56"}]}
+        )
         try:
-            payload = {
-                "choices": [
-                    {"message": {"content": "intermediate: 0.12 final: 0.56"}}
-                ]
-            }
-            perf_mod.requests.post = lambda *a, **k: _StubResponse(payload)
             score = self.metric.calculate_score()
             self.assertAlmostEqual(score, 0.56, places=6)
         finally:
-            perf_mod.requests.post = original_post
+            perf_mod.BEDROCK_CLIENT = original_client
+
+    def test_heuristic_fallback_used_when_no_client(self):
+        (self.model_dir / "README.md").write_text(
+            "Benchmark accuracy 93.5% compared to baseline; see arxiv 1234.5678.",
+            encoding="utf-8",
+        )
+        self.metric.setup_resources()
+
+        import src.metrics.performance_claims as perf_mod
+        original_client = perf_mod.BEDROCK_CLIENT
+        perf_mod.BEDROCK_CLIENT = None
+        try:
+            score = self.metric.calculate_score()
+            self.assertGreater(score, 0.0)
+        finally:
+            perf_mod.BEDROCK_CLIENT = original_client
 
 
 if __name__ == "__main__":
