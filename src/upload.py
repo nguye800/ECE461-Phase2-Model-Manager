@@ -8,28 +8,34 @@ DynamoDB. Each record mirrors the structure consumed by the metadata and rating
 Lambdas so downstream services can read the same data model.
 
 Environment variables used:
-    MODEL_BUCKET_NAME: S3 bucket where artifacts will be stored (required)
     ARTIFACTS_DDB_TABLE: DynamoDB table that stores artifact metadata (required)
     ARTIFACTS_DDB_REGION: Optional override for the DynamoDB region
     SCORING_QUEUE_URL: URL of the SQS queue used to trigger rating jobs (optional)
+Artifacts are stored in the S3 bucket 'modelzip-logs-artifacts'.
 """
 
 from __future__ import annotations
 
 import base64
+import copy
+import hashlib
 import io
 import json
 import logging
 import os
 import re
+import urllib.request
+import uuid
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import urlparse
-import zipfile
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlparse
 
 import boto3
+from boto3.dynamodb.types import TypeSerializer
 from boto3.session import Session
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -37,14 +43,23 @@ LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 
 DEFAULT_SCORING_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/965919626283/enqueue-rate"
+SCORING_QUEUE_ARN = "arn:aws:sqs:us-east-1:965919626283:enqueue-rate"
+MODEL_BUCKET_NAME = "modelzip-logs-artifacts"
 
 _S3_CLIENT: Optional[boto3.client] = None
 _SQS_CLIENT: Optional[boto3.client] = None
 _ARTIFACTS_TABLE = None
+_DYNAMODB_SERIALIZER = TypeSerializer()
+
+_ALLOWED_ARTIFACT_TYPES = {"model", "dataset", "code"}
 
 
 class UploadError(Exception):
     """Custom error for failures within the upload pipeline."""
+
+
+class ArtifactNotFound(UploadError):
+    """Raised when a requested artifact is missing from the registry."""
 
 
 @dataclass
@@ -142,6 +157,380 @@ class UploadRequest:
         )
 
 
+def _extract_http_method(event: Dict[str, Any]) -> str:
+    request_context = event.get("requestContext") or {}
+    method = (
+        request_context.get("http", {}).get("method")
+        or event.get("httpMethod")
+        or event.get("method")
+    )
+    return method.upper() if isinstance(method, str) else ""
+
+
+def _extract_path(event: Dict[str, Any]) -> str:
+    request_context = event.get("requestContext") or {}
+    return (
+        event.get("rawPath")
+        or event.get("path")
+        or request_context.get("http", {}).get("path")
+        or ""
+    )
+
+
+def _parse_path_segments(path: str) -> List[str]:
+    return [segment for segment in path.strip("/").split("/") if segment]
+
+
+def _identify_spec_operation(event: Dict[str, Any]) -> Optional[Tuple[str, str, Optional[str]]]:
+    """
+    Determine whether the event targets one of the new artifact endpoints.
+    Returns (operation, artifact_type, artifact_id) when matched.
+    """
+    method = _extract_http_method(event)
+    if not method:
+        return None
+
+    path_params = event.get("pathParameters") or {}
+    path = _extract_path(event)
+    segments = _parse_path_segments(path)
+
+    if method == "POST":
+        artifact_type = path_params.get("artifact_type")
+        if not artifact_type and len(segments) >= 2 and segments[0] == "artifact":
+            artifact_type = segments[1]
+        if artifact_type:
+            return ("create", artifact_type, None)
+
+    if method == "PUT":
+        artifact_type = path_params.get("artifact_type")
+        artifact_id = path_params.get("id") or path_params.get("artifact_id")
+        if (not artifact_type or not artifact_id) and len(segments) >= 3 and segments[0] == "artifacts":
+            artifact_type = artifact_type or segments[1]
+            artifact_id = artifact_id or segments[2]
+        if artifact_type and artifact_id:
+            return ("update", artifact_type, artifact_id)
+
+    return None
+
+
+def _normalize_artifact_type(value: Optional[str]) -> str:
+    if not value:
+        raise UploadError("Artifact type is required in the request path.")
+    normalized = value.lower()
+    if normalized not in _ALLOWED_ARTIFACT_TYPES:
+        raise UploadError(f"Unsupported artifact type '{value}'.")
+    return normalized
+
+
+def _load_json_body(event: Dict[str, Any]) -> Dict[str, Any]:
+    if "body" not in event or event["body"] is None:
+        raise UploadError("Request body is required.")
+
+    body = event["body"]
+    if isinstance(body, (bytes, bytearray)):
+        raw_body = bytes(body)
+    elif isinstance(body, str):
+        raw_body = body.encode("utf-8")
+    else:
+        raw_body = json.dumps(body).encode("utf-8")
+
+    if event.get("isBase64Encoded"):
+        raw_body = base64.b64decode(raw_body)
+
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise UploadError("Request body must be valid JSON.") from exc
+
+    if not isinstance(payload, dict):
+        raise UploadError("Request body must be a JSON object.")
+    return payload
+
+
+def _generate_artifact_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _infer_name_from_url(url: str) -> Optional[str]:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    candidate = parsed.path.strip("/").split("/")[-1]
+    return candidate or None
+
+
+def _sanitize_key_component(value: str) -> str:
+    sanitized = re.sub(r"[^0-9A-Za-z._-]", "-", value.strip("/"))
+    return sanitized or "artifact"
+
+
+def _build_artifact_s3_key(artifact_type: str, artifact_id: str, source_url: str) -> str:
+    filename = _infer_name_from_url(source_url) or f"{artifact_id}.bin"
+    filename = _sanitize_key_component(filename)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"artifacts/{artifact_type}/{artifact_id}/{timestamp}-{filename}"
+
+
+def _build_download_url(bucket: str, key: str) -> str:
+    encoded_key = quote(key.lstrip("/"), safe="/")
+    return f"https://{bucket}.s3.amazonaws.com/{encoded_key}"
+
+
+def _download_artifact_from_url(url: str) -> Tuple[bytes, str]:
+    request = urllib.request.Request(url, headers={"User-Agent": "ModelRegistryUploader/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            body = response.read()
+            if not body:
+                raise UploadError("Artifact download returned no data.")
+            content_type = response.headers.get("Content-Type", "application/octet-stream")
+            if ";" in content_type:
+                content_type = content_type.split(";", 1)[0]
+            return body, content_type or "application/octet-stream"
+    except HTTPError as exc:
+        raise UploadError(f"Failed to download artifact (HTTP {exc.code}).") from exc
+    except URLError as exc:
+        raise UploadError(f"Failed to download artifact: {exc.reason}") from exc
+
+
+def _build_spec_registry_item(
+    artifact_type: str,
+    artifact_id: str,
+    name: str,
+    source_url: str,
+    bucket_name: str,
+    object_key: str,
+    download_url: str,
+    content_type: str,
+    size_bytes: int,
+    checksum: str,
+    existing: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    base = copy.deepcopy(existing) if existing else {}
+    base.update(_build_dynamo_key(artifact_type, artifact_id))
+    base["type"] = artifact_type.upper()
+    base["artifact_type"] = artifact_type
+    base["model_id"] = artifact_id
+    base["name"] = name
+    base["name_lc"] = name.lower()
+    base["model_url"] = source_url
+    base["metadata"] = {"name": name, "id": artifact_id, "type": artifact_type}
+    base["data"] = {"url": source_url, "download_url": download_url}
+
+    base_models = base.get("base_models")
+    base["base_models"] = copy.deepcopy(base_models) if isinstance(base_models, list) else []
+    base["dataset"] = _merge_with_defaults(base.get("dataset"), _SPEC_DATASET_DEFAULTS)
+    base["codebase"] = _merge_with_defaults(base.get("codebase"), _SPEC_CODEBASE_DEFAULTS)
+
+    assets = _merge_with_defaults(base.get("assets"), _SPEC_ASSET_DEFAULTS)
+    assets.update(
+        {
+            "key": object_key,
+            "model_zip_key": object_key,
+            "model_zip_sha256": checksum,
+            "bucket": bucket_name,
+            "download_url": download_url,
+            "content_type": content_type,
+            "size_bytes": size_bytes,
+        }
+    )
+    base["assets"] = assets
+
+    if not base.get("metrics"):
+        base["metrics"] = _default_metrics()
+    if not base.get("scoring"):
+        base["scoring"] = _default_scoring()
+    else:
+        base["scoring"] = _merge_with_defaults(base["scoring"], _default_scoring())
+    if not base.get("eligibility"):
+        base["eligibility"] = _default_eligibility()
+    else:
+        base["eligibility"] = _merge_with_defaults(base["eligibility"], _default_eligibility())
+    if not base.get("approval"):
+        base["approval"] = _default_approval()
+    else:
+        base["approval"] = _merge_with_defaults(base["approval"], _default_approval())
+    return base
+
+
+def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) -> Dict[str, Any]:
+    artifact_type = _normalize_artifact_type(artifact_type_raw)
+    payload = _load_json_body(event)
+    source_url = payload.get("url")
+    if not _is_valid_url(source_url):
+        raise UploadError("Request body must include a valid 'url'.")
+
+    requested_name = payload.get("name")
+    if not requested_name:
+        metadata_section = payload.get("metadata")
+        if isinstance(metadata_section, dict):
+            requested_name = metadata_section.get("name")
+    if requested_name is not None:
+        if not isinstance(requested_name, str):
+            raise UploadError("Artifact name must be a string when provided.")
+        requested_name = requested_name.strip() or None
+    artifact_id = _generate_artifact_id()
+    name = requested_name or _infer_name_from_url(source_url) or f"{artifact_type}-{artifact_id}"
+
+    bucket_name = MODEL_BUCKET_NAME
+    table = _get_artifacts_table()
+    s3_client = _get_s3_client()
+
+    artifact_body, content_type = _download_artifact_from_url(source_url)
+    checksum = hashlib.sha256(artifact_body).hexdigest()
+    object_key = _build_artifact_s3_key(artifact_type, artifact_id, source_url)
+    LOGGER.info(
+        "Creating artifact %s (%s) from %s into s3://%s/%s",
+        name,
+        artifact_id,
+        source_url,
+        bucket_name,
+        object_key,
+    )
+    s3_client.put_object(
+        Bucket=bucket_name,
+        Key=object_key,
+        Body=artifact_body,
+        ContentType=content_type,
+        Metadata={
+            "artifact_id": artifact_id,
+            "artifact_type": artifact_type,
+            "source_url": source_url,
+        },
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    download_url = _build_download_url(bucket_name, object_key)
+    size_bytes = len(artifact_body)
+
+    item = _build_spec_registry_item(
+        artifact_type,
+        artifact_id,
+        name,
+        source_url,
+        bucket_name,
+        object_key,
+        download_url,
+        content_type,
+        size_bytes,
+        checksum,
+    )
+    item["created_at"] = now
+    item["updated_at"] = now
+
+    _put_item(table, item)
+    scoring_urls = _collect_scoring_urls(item)
+    if scoring_urls:
+        _enqueue_scoring_job(artifact_id, scoring_urls)
+    return _format_response(201, {"metadata": item["metadata"], "data": item["data"]})
+
+
+def _handle_spec_artifact_update(
+    event: Dict[str, Any], artifact_type_raw: str, artifact_id: str
+) -> Dict[str, Any]:
+    artifact_type = _normalize_artifact_type(artifact_type_raw)
+    payload = _load_json_body(event)
+    metadata = payload.get("metadata")
+    data = payload.get("data")
+    if not isinstance(metadata, dict) or not isinstance(data, dict):
+        raise UploadError("Request body must include 'metadata' and 'data' objects.")
+
+    name = metadata.get("name")
+    metadata_id = metadata.get("id")
+    metadata_type = metadata.get("type") or metadata.get("artifact_type")
+    if not isinstance(name, str) or not name.strip() or not metadata_id:
+        raise UploadError("Metadata must include 'name' and 'id'.")
+    name = name.strip()
+    if not isinstance(metadata_id, str):
+        metadata_id = str(metadata_id)
+    if metadata_type is not None and not isinstance(metadata_type, str):
+        metadata_type = str(metadata_type)
+    if metadata_id != artifact_id:
+        raise UploadError("Metadata artifact id must match request path.")
+    if metadata_type and _normalize_artifact_type(metadata_type) != artifact_type:
+        raise UploadError("Metadata artifact type must match request path.")
+
+    source_url = data.get("url")
+    if not _is_valid_url(source_url):
+        raise UploadError("Artifact data must include a valid 'url'.")
+
+    bucket_name = MODEL_BUCKET_NAME
+    table = _get_artifacts_table()
+    key = _build_dynamo_key(artifact_type, artifact_id)
+    existing = _fetch_existing_item(table, key)
+    if not existing:
+        raise ArtifactNotFound(f"Artifact '{artifact_id}' was not found.")
+
+    existing_name = (existing.get("metadata") or {}).get("name") or existing.get("name")
+    if existing_name and existing_name != name:
+        raise UploadError("Metadata name does not match the stored artifact.")
+
+    s3_client = _get_s3_client()
+    existing_assets = existing.get("assets") or {}
+    old_bucket = existing_assets.get("bucket")
+    old_key = existing_assets.get("key") or existing_assets.get("model_zip_key")
+    if old_bucket and old_key:
+        try:
+            s3_client.delete_object(Bucket=old_bucket, Key=old_key)
+        except (BotoCoreError, ClientError) as exc:
+            LOGGER.warning(
+                "Failed to delete previous artifact object %s/%s: %s",
+                old_bucket,
+                old_key,
+                exc,
+            )
+
+    artifact_body, content_type = _download_artifact_from_url(source_url)
+    checksum = hashlib.sha256(artifact_body).hexdigest()
+    object_key = _build_artifact_s3_key(artifact_type, artifact_id, source_url)
+    LOGGER.info(
+        "Updating artifact %s (%s) from %s into s3://%s/%s",
+        name,
+        artifact_id,
+        source_url,
+        bucket_name,
+        object_key,
+    )
+    s3_client.put_object(
+        Bucket=bucket_name,
+        Key=object_key,
+        Body=artifact_body,
+        ContentType=content_type,
+        Metadata={
+            "artifact_id": artifact_id,
+            "artifact_type": artifact_type,
+            "source_url": source_url,
+        },
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    download_url = _build_download_url(bucket_name, object_key)
+    size_bytes = len(artifact_body)
+    updated_item = _build_spec_registry_item(
+        artifact_type,
+        artifact_id,
+        name,
+        source_url,
+        bucket_name,
+        object_key,
+        download_url,
+        content_type,
+        size_bytes,
+        checksum,
+        existing=existing,
+    )
+    updated_item.setdefault("created_at", existing.get("created_at") if existing else now)
+    updated_item["updated_at"] = now
+
+    _put_item(table, updated_item)
+    scoring_urls = _collect_scoring_urls(updated_item)
+    if scoring_urls:
+        _enqueue_scoring_job(artifact_id, scoring_urls)
+    return _format_response(200, {"metadata": updated_item["metadata"], "data": updated_item["data"]})
+
+
+
 def _require_env(name: str, *, optional: bool = False, default: Optional[str] = None) -> str:
     """Fetch an environment variable or raise if missing."""
     value = os.getenv(name, default)
@@ -208,12 +597,15 @@ def _model_ready_for_scoring(
     return all(_is_valid_url(url) for url in (model_url, codebase_url, dataset_url))
 
 
-def _collect_scoring_urls(item: Dict[str, Any], request: UploadRequest) -> Optional[Dict[str, str]]:
+def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest] = None) -> Optional[Dict[str, str]]:
     dataset = item.get("dataset") or {}
     codebase = item.get("codebase") or {}
-    model_url = item.get("model_url") or request.model_url
-    codebase_url = codebase.get("url") or _resolve_codebase_url(request)
-    dataset_url = dataset.get("url") or _resolve_dataset_url(request)
+    model_url = item.get("model_url") or (request.model_url if request else None)
+    codebase_url = codebase.get("url")
+    dataset_url = dataset.get("url")
+    if request:
+        codebase_url = codebase_url or _resolve_codebase_url(request)
+        dataset_url = dataset_url or _resolve_dataset_url(request)
 
     if _model_ready_for_scoring(model_url, codebase_url, dataset_url):
         return {
@@ -246,7 +638,12 @@ def _enqueue_scoring_job(model_id: str, urls: Dict[str, str]) -> bool:
     try:
         sqs_client = _get_sqs_client()
         sqs_client.send_message(QueueUrl=queue_url, MessageBody=message_body)
-        LOGGER.info("Queued scoring job for model %s", model_id)
+        LOGGER.info(
+            "Queued scoring job for model %s on %s (%s)",
+            model_id,
+            queue_url,
+            SCORING_QUEUE_ARN,
+        )
         return True
     except (BotoCoreError, ClientError) as exc:
         LOGGER.warning(
@@ -266,7 +663,7 @@ def _extract_artifact_type(event: Dict[str, Any]) -> str:
     return (path_params.get("artifact_type") or "model").lower()
 
 
-def _build_dynamo_key(artifact_type: str, model_id: str) -> Dict[str, str]:
+def _build_dynamo_key(artifact_type: str, artifact_id: str) -> Dict[str, str]:
     pk_field = os.getenv("RATE_PK_FIELD", "pk")
     sk_field = os.getenv("RATE_SK_FIELD", "sk")
     pk_prefix = os.getenv("RATE_PK_PREFIX") or f"{artifact_type.upper()}#"
@@ -274,9 +671,41 @@ def _build_dynamo_key(artifact_type: str, model_id: str) -> Dict[str, str]:
         pk_prefix = f"{pk_prefix}#"
     sk_value = os.getenv("RATE_META_SK", "META")
     return {
-        pk_field: f"{pk_prefix}{model_id}",
+        pk_field: f"{pk_prefix}{artifact_id}",
         sk_field: sk_value,
     }
+
+
+_SPEC_DATASET_DEFAULTS = {
+    "url": None,
+    "version": None,
+    "updated_at": None,
+}
+
+_SPEC_CODEBASE_DEFAULTS = {
+    "url": None,
+    "version": None,
+    "updated_at": None,
+}
+
+_SPEC_ASSET_DEFAULTS = {
+    "key": None,
+    "model_zip_key": None,
+    "model_zip_sha256": None,
+    "bucket": None,
+    "download_url": None,
+    "content_type": None,
+    "size_bytes": None,
+}
+
+
+def _merge_with_defaults(
+    existing: Optional[Dict[str, Any]], defaults: Dict[str, Any]
+) -> Dict[str, Any]:
+    merged = copy.deepcopy(defaults)
+    if existing:
+        merged.update(existing)
+    return merged
 
 
 _METRIC_BREAKDOWN_KEYS = [
@@ -310,6 +739,8 @@ def _default_scoring() -> Dict[str, Any]:
     return {
         "status": "INITIAL",
         "score_version": "v1",
+        "last_scored_at": None,
+        "scorer_build": None,
     }
 
 
@@ -318,22 +749,29 @@ def _default_eligibility() -> Dict[str, Any]:
 
 
 def _default_approval() -> Dict[str, Any]:
-    return {"visible": False, "status": "PENDING"}
+    return {"visible": False, "status": "PENDING", "reason": None}
 
 
 def _prepare_for_dynamo(value: Any) -> Any:
     if isinstance(value, float):
         return Decimal(str(value))
     if isinstance(value, dict):
-        prepared: Dict[str, Any] = {}
-        for key, entry in value.items():
-            if entry is None:
-                continue
-            prepared[key] = _prepare_for_dynamo(entry)
-        return prepared
+        return {key: _prepare_for_dynamo(entry) for key, entry in value.items()}
     if isinstance(value, list):
-        return [_prepare_for_dynamo(entry) for entry in value if entry is not None]
+        return [_prepare_for_dynamo(entry) for entry in value]
     return value
+
+
+def _serialize_item_for_dynamo(item: Dict[str, Any]) -> Dict[str, Any]:
+    serialized: Dict[str, Any] = {}
+    for key, value in item.items():
+        serialized[key] = _DYNAMODB_SERIALIZER.serialize(_prepare_for_dynamo(value))
+    return serialized
+
+
+def _put_item(table, item: Dict[str, Any]) -> None:
+    serialized = _serialize_item_for_dynamo(item)
+    table.meta.client.put_item(TableName=table.name, Item=serialized)
 
 
 def _merge_dataset_info(request: UploadRequest, metadata: Dict[str, Any], existing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -375,6 +813,9 @@ def _build_ddb_item(
     elif "name" not in item:
         item["name"] = request.model_id
 
+    if item.get("name"):
+        item["name_lc"] = str(item["name"]).lower()
+
     if metadata.get("base_models"):
         item["base_models"] = metadata["base_models"]
 
@@ -410,7 +851,7 @@ def _build_ddb_item(
         item["created_at"] = now
     item["updated_at"] = now
 
-    return _prepare_for_dynamo(item)
+    return item
 
 
 def _fetch_existing_item(table, key: Dict[str, str]) -> Optional[Dict[str, Any]]:
@@ -611,9 +1052,19 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     with a 400-level status code (client issues) or 500-level (server issues).
     """
     try:
+        spec_operation = _identify_spec_operation(event)
+        if spec_operation:
+            operation, artifact_type, artifact_id = spec_operation
+            if operation == "create":
+                return _handle_spec_artifact_create(event, artifact_type)
+            if operation == "update":
+                if not artifact_id:
+                    raise UploadError("Artifact id is required for update requests.")
+                return _handle_spec_artifact_update(event, artifact_type, artifact_id)
+
         request = UploadRequest.from_event(event)
 
-        bucket_name = _require_env("MODEL_BUCKET_NAME")
+        bucket_name = MODEL_BUCKET_NAME
         artifact_type = _extract_artifact_type(event)
         table = _get_artifacts_table()
 
@@ -624,7 +1075,7 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         item = _build_ddb_item(request, uploaded_artifacts, artifact_type, existing)
         scoring_urls = _collect_scoring_urls(item, request)
         try:
-            table.put_item(Item=item)
+            _put_item(table, item)
         except ClientError as exc:
             LOGGER.error("Failed to write artifact metadata to DynamoDB: %s", exc, exc_info=True)
             return _format_response(
@@ -645,6 +1096,10 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "scoring_job_enqueued": queued_scoring_job,
         }
         return _format_response(200, response_body)
+
+    except ArtifactNotFound as err:
+        LOGGER.error("Artifact not found error: %s", err, exc_info=True)
+        return _format_response(404, {"status": "error", "message": str(err)})
 
     except UploadError as err:
         LOGGER.error("Upload error: %s", err, exc_info=True)
