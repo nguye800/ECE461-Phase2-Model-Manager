@@ -120,7 +120,7 @@ def _handle_post_artifacts(event: dict) -> dict:
         headers["x-next-offset"] = _encode_pagination_token(next_key)
 
     normalized_offset = pagination.skip
-    if normalized_offset == 0 and isinstance(offset_input, str) and offset_input.strip():
+    if pagination.start_key and isinstance(offset_input, str) and offset_input.strip():
         normalized_offset = offset_input
 
     body = {
@@ -196,7 +196,7 @@ def _handle_post_regex(event: dict) -> dict:
         headers["x-next-offset"] = _encode_pagination_token(next_key)
 
     normalized_offset = pagination.skip
-    if normalized_offset == 0 and isinstance(offset_input, str) and offset_input.strip():
+    if pagination.start_key and isinstance(offset_input, str) and offset_input.strip():
         normalized_offset = offset_input
 
     body = {
