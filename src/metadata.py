@@ -310,7 +310,9 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
             return _response(200, payload)
 
         if method == "GET" and action == "audit":
-            audits = _get_audits(artifact_type, artifact_id)
+            audits = metadata_item.get("audits")
+            if not audits:
+                audits = _get_audits(artifact_type, artifact_id)
             formatted = _format_audit_entries(audits, artifact_type, artifact_id)
             return _response(200, formatted)
 
