@@ -10,7 +10,7 @@ import boto3, os, json, re, tempfile, subprocess, sys
 from dotenv import load_dotenv
 
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "meta.llama2-13b-chat-v1")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "meta.llama3-8b-instruct-v1:0")
 
 brt = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 

@@ -444,6 +444,8 @@ def _build_spec_registry_item(
         base["approval"] = _default_approval()
     else:
         base["approval"] = _merge_with_defaults(base["approval"], _default_approval())
+    if "audits" not in base:
+        base["audits"] = []
     return base
 
 
@@ -505,6 +507,13 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
     )
     item["created_at"] = now
     item["updated_at"] = now
+    item.setdefault("audits", [])
+    _append_audit_entry(
+        item,
+        action="CREATE",
+        artifact_type=artifact_type,
+        user=_resolve_request_user(payload),
+    )
 
     _put_item(table, item)
     scoring_urls = _collect_scoring_urls(item)
@@ -623,6 +632,12 @@ def _handle_spec_artifact_update(
     updated_item.setdefault("created_at", existing.get("created_at") if existing else now)
     updated_item["updated_at"] = now
 
+    _append_audit_entry(
+        updated_item,
+        action="UPDATE",
+        artifact_type=artifact_type,
+        user=_resolve_request_user(payload),
+    )
     _put_item(table, updated_item)
     scoring_urls = _collect_scoring_urls(updated_item)
     if scoring_urls:
@@ -969,9 +984,41 @@ def _build_ddb_item(
 
     if not existing:
         item["created_at"] = now
+        item.setdefault("audits", [])
     item["updated_at"] = now
 
     return item
+
+
+def _resolve_request_user(payload: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = payload.get("user") if isinstance(payload, dict) else None
+    name = "system"
+    is_admin = False
+    if isinstance(metadata, dict):
+        name = metadata.get("name") or name
+        is_admin = bool(metadata.get("is_admin", False))
+    return {"name": name, "is_admin": is_admin}
+
+
+def _append_audit_entry(
+    item: Dict[str, Any],
+    *,
+    action: str,
+    artifact_type: str,
+    user: Optional[Dict[str, Any]] = None,
+) -> None:
+    entry = {
+        "user": user or {"name": "system", "is_admin": False},
+        "date": datetime.now(timezone.utc).isoformat(),
+        "artifact": {
+            "name": item.get("name"),
+            "id": item.get("model_id"),
+            "type": artifact_type,
+        },
+        "action": action.upper(),
+    }
+    audits = item.setdefault("audits", [])
+    audits.append(entry)
 
 
 def _fetch_existing_item(table, key: Dict[str, str]) -> Optional[Dict[str, Any]]:

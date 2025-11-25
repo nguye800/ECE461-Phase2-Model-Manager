@@ -249,6 +249,11 @@ def _score_model(model_id: str) -> Dict[str, Any]:
         record["eligibility"] = _decimalize(eligibility_payload)
         record["approval"] = _decimalize(approval_payload)
         record["updated_at"] = now_iso
+        _append_audit_entry(
+            record,
+            action="RATE",
+            user={"name": "scoring-lambda", "is_admin": True},
+        )
 
         table.put_item(Item=record)
 
@@ -531,6 +536,11 @@ def _record_failure(table: Any, item: Dict[str, Any], message: str) -> None:
         record["scoring"] = _decimalize(scoring_payload)
         record["eligibility"] = _decimalize(eligibility_payload)
         record["updated_at"] = now_iso
+        _append_audit_entry(
+            record,
+            action="RATE_FAILED",
+            user={"name": "scoring-lambda", "is_admin": True},
+        )
         table.put_item(Item=record)
     except Exception:  # pragma: no cover - defensive
         logger.exception("Failed to record failure details in DynamoDB")
@@ -596,3 +606,23 @@ def _build_openapi_response(
         response[f"{metric_name}_latency"] = int(metric_entry.get("latency_ms", 0))
 
     return response
+
+
+def _append_audit_entry(
+    item: Dict[str, Any],
+    *,
+    action: str,
+    user: Optional[Dict[str, Any]] = None,
+) -> None:
+    entry = {
+        "user": user or {"name": "system", "is_admin": False},
+        "date": _utc_now_iso(),
+        "artifact": {
+            "name": item.get("name"),
+            "id": item.get("model_id"),
+            "type": item.get("artifact_type") or item.get("type", "MODEL").lower(),
+        },
+        "action": action.upper(),
+    }
+    audits = item.setdefault("audits", [])
+    audits.append(entry)

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
 BEDROCK_MODEL_ID = os.getenv(
     "BEDROCK_MODEL_ID",
-    "meta.llama2-13b-chat-v1",
+    "meta.llama3-8b-instruct-v1:0",
 )
 
 try:  # pragma: no cover - exercised only when AWS creds are present
