@@ -455,6 +455,13 @@ def _handle_spec_artifact_update(
     if not _is_valid_url(source_url):
         raise UploadError("Artifact data must include a valid 'url'.")
 
+    codebase_override = data.get("codebase")
+    if codebase_override is not None and not isinstance(codebase_override, dict):
+        raise UploadError("Field 'codebase' must be an object when provided.")
+    dataset_override = data.get("dataset")
+    if dataset_override is not None and not isinstance(dataset_override, dict):
+        raise UploadError("Field 'dataset' must be an object when provided.")
+
     bucket_name = MODEL_BUCKET_NAME
     table = _get_artifacts_table()
     key = _build_dynamo_key(artifact_type, artifact_id)
@@ -520,6 +527,14 @@ def _handle_spec_artifact_update(
         checksum,
         existing=existing,
     )
+    if codebase_override:
+        merged_codebase = _merge_with_defaults(updated_item.get("codebase"), _SPEC_CODEBASE_DEFAULTS)
+        merged_codebase.update({k: v for k, v in codebase_override.items() if v is not None})
+        updated_item["codebase"] = merged_codebase
+    if dataset_override:
+        merged_dataset = _merge_with_defaults(updated_item.get("dataset"), _SPEC_DATASET_DEFAULTS)
+        merged_dataset.update({k: v for k, v in dataset_override.items() if v is not None})
+        updated_item["dataset"] = merged_dataset
     updated_item.setdefault("created_at", existing.get("created_at") if existing else now)
     updated_item["updated_at"] = now
 
