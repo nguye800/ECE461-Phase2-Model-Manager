@@ -10,7 +10,7 @@ import boto3
 
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
 BEDROCK_MODEL_ID = os.getenv(
-    "BEDROCK_MODEL_ID", "anthropic.claude-3-sonnet-20240229-v1:0"
+    "BEDROCK_MODEL_ID", "meta.llama2-13b-chat-v1"
 )
 
 logger = logging.getLogger(__name__)
@@ -69,20 +69,10 @@ class PerformanceClaimsMetric(BaseMetric):
         )
 
         body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 400,
+            "prompt": f"<s>[INST] {prompt} [/INST]",
+            "max_gen_len": 600,
             "temperature": 0.0,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt,
-                        }
-                    ],
-                }
-            ],
+            "top_p": 0.9,
         }
 
         try:
@@ -102,12 +92,10 @@ class PerformanceClaimsMetric(BaseMetric):
             if hasattr(payload, "read")
             else json.loads(payload)
         )
-        text_segments = [
-            part.get("text", "")
-            for part in payload_json.get("content", [])
-            if isinstance(part, dict) and part.get("type") == "text"
-        ]
-        combined = "\n".join(text_segments).strip()
+        combined = payload_json.get("generation")
+        if not combined and payload_json.get("generations"):
+            combined = payload_json["generations"][0].get("text")
+        combined = (combined or "").strip()
         if not combined:
             return None
 
