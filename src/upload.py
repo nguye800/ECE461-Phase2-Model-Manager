@@ -762,6 +762,14 @@ def _prepare_for_dynamo(value: Any) -> Any:
     return value
 
 
+def _strip_nulls(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _strip_nulls(entry) for key, entry in value.items() if entry is not None}
+    if isinstance(value, list):
+        return [_strip_nulls(entry) for entry in value if entry is not None]
+    return value
+
+
 def _serialize_item_for_dynamo(item: Dict[str, Any]) -> Dict[str, Any]:
     prepared = _prepare_for_dynamo(item)
     serialized = _DYNAMODB_SERIALIZER.serialize(prepared)
@@ -772,7 +780,18 @@ def _serialize_item_for_dynamo(item: Dict[str, Any]) -> Dict[str, Any]:
 
 def _put_item(table, item: Dict[str, Any]) -> None:
     serialized = _serialize_item_for_dynamo(item)
-    table.meta.client.put_item(TableName=table.name, Item=serialized)
+    try:
+        table.meta.client.put_item(TableName=table.name, Item=serialized)
+    except ClientError as exc:
+        message = exc.response.get("Error", {}).get("Message", "")
+        if "Type mismatch for key" not in message:
+            raise
+        LOGGER.warning(
+            "Dynamo serialization mismatch detected (%s). Falling back to default serialization.",
+            message,
+        )
+        fallback_item = _strip_nulls(item)
+        table.put_item(Item=_prepare_for_dynamo(fallback_item))
 
 
 def _merge_dataset_info(request: UploadRequest, metadata: Dict[str, Any], existing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
