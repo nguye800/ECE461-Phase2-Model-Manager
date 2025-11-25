@@ -763,10 +763,11 @@ def _prepare_for_dynamo(value: Any) -> Any:
 
 
 def _serialize_item_for_dynamo(item: Dict[str, Any]) -> Dict[str, Any]:
-    serialized: Dict[str, Any] = {}
-    for key, value in item.items():
-        serialized[key] = _DYNAMODB_SERIALIZER.serialize(_prepare_for_dynamo(value))
-    return serialized
+    prepared = _prepare_for_dynamo(item)
+    serialized = _DYNAMODB_SERIALIZER.serialize(prepared)
+    if "M" not in serialized:
+        raise UploadError("Serialized Dynamo item must be a map representation.")
+    return serialized["M"]
 
 
 def _put_item(table, item: Dict[str, Any]) -> None:
