@@ -45,6 +45,7 @@ LOGGER.setLevel(logging.INFO)
 DEFAULT_SCORING_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/965919626283/enqueue-rate"
 SCORING_QUEUE_ARN = "arn:aws:sqs:us-east-1:965919626283:enqueue-rate"
 MODEL_BUCKET_NAME = "modelzip-logs-artifacts"
+STREAM_CHUNK_SIZE = 8 * 1024 * 1024
 
 _S3_CLIENT: Optional[boto3.client] = None
 _SQS_CLIENT: Optional[boto3.client] = None
@@ -294,6 +295,98 @@ def _download_artifact_from_url(url: str) -> Tuple[bytes, str]:
         raise UploadError(f"Failed to download artifact: {exc.reason}") from exc
 
 
+def _stream_download_to_s3(
+    url: str,
+    bucket: str,
+    key: str,
+    *,
+    metadata: Dict[str, Any],
+) -> Tuple[int, str, str]:
+    """
+    Stream a remote artifact directly into S3 using multipart upload when necessary.
+    Returns (size_bytes, sha256_hex, content_type).
+    """
+    request = urllib.request.Request(url, headers={"User-Agent": "ModelRegistryUploader/1.0"})
+    s3_client = _get_s3_client()
+    metadata_str = {k: str(v) for k, v in metadata.items()}
+    upload_id: Optional[str] = None
+
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            content_type = response.headers.get("Content-Type", "application/octet-stream")
+            chunk = response.read(STREAM_CHUNK_SIZE)
+            if not chunk:
+                raise UploadError("Artifact download returned no data.")
+
+            next_chunk = response.read(STREAM_CHUNK_SIZE)
+            hasher = hashlib.sha256()
+
+            if not next_chunk:
+                hasher.update(chunk)
+                s3_client.put_object(
+                    Bucket=bucket,
+                    Key=key,
+                    Body=chunk,
+                    ContentType=content_type,
+                    Metadata=metadata_str,
+                )
+                return len(chunk), hasher.hexdigest(), content_type
+
+            create_resp = s3_client.create_multipart_upload(
+                Bucket=bucket,
+                Key=key,
+                ContentType=content_type,
+                Metadata=metadata_str,
+            )
+            upload_id = create_resp["UploadId"]
+            parts: List[Dict[str, Any]] = []
+            total_bytes = 0
+            part_number = 1
+
+            def _upload_part(data: bytes) -> None:
+                nonlocal part_number, total_bytes
+                hasher.update(data)
+                total_bytes += len(data)
+                result = s3_client.upload_part(
+                    Bucket=bucket,
+                    Key=key,
+                    PartNumber=part_number,
+                    UploadId=upload_id,
+                    Body=data,
+                )
+                parts.append({"PartNumber": part_number, "ETag": result["ETag"]})
+                part_number += 1
+
+            _upload_part(chunk)
+            _upload_part(next_chunk)
+
+            while True:
+                chunk = response.read(STREAM_CHUNK_SIZE)
+                if not chunk:
+                    break
+                _upload_part(chunk)
+
+            s3_client.complete_multipart_upload(
+                Bucket=bucket,
+                Key=key,
+                UploadId=upload_id,
+                MultipartUpload={"Parts": parts},
+            )
+            return total_bytes, hasher.hexdigest(), content_type
+
+    except Exception as exc:
+        if upload_id:
+            try:
+                s3_client.abort_multipart_upload(
+                    Bucket=bucket,
+                    Key=key,
+                    UploadId=upload_id,
+                )
+            except Exception:
+                LOGGER.warning("Failed to abort multipart upload for %s: %s", key, exc)
+        raise UploadError(f"Failed to stream artifact '{url}': {exc}") from exc
+
+
 def _build_spec_registry_item(
     artifact_type: str,
     artifact_id: str,
@@ -375,10 +468,6 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
 
     bucket_name = MODEL_BUCKET_NAME
     table = _get_artifacts_table()
-    s3_client = _get_s3_client()
-
-    artifact_body, content_type = _download_artifact_from_url(source_url)
-    checksum = hashlib.sha256(artifact_body).hexdigest()
     object_key = _build_artifact_s3_key(artifact_type, artifact_id, source_url)
     LOGGER.info(
         "Creating artifact %s (%s) from %s into s3://%s/%s",
@@ -388,12 +477,11 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
         bucket_name,
         object_key,
     )
-    s3_client.put_object(
-        Bucket=bucket_name,
-        Key=object_key,
-        Body=artifact_body,
-        ContentType=content_type,
-        Metadata={
+    size_bytes, checksum, content_type = _stream_download_to_s3(
+        source_url,
+        bucket_name,
+        object_key,
+        metadata={
             "artifact_id": artifact_id,
             "artifact_type": artifact_type,
             "source_url": source_url,
@@ -402,7 +490,6 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
 
     now = datetime.now(timezone.utc).isoformat()
     download_url = _build_download_url(bucket_name, object_key)
-    size_bytes = len(artifact_body)
 
     item = _build_spec_registry_item(
         artifact_type,
@@ -498,8 +585,6 @@ def _handle_spec_artifact_update(
         existing_dataset.update({k: v for k, v in dataset_override.items() if v is not None})
         mutable_existing["dataset"] = existing_dataset
 
-    artifact_body, content_type = _download_artifact_from_url(source_url)
-    checksum = hashlib.sha256(artifact_body).hexdigest()
     object_key = _build_artifact_s3_key(artifact_type, artifact_id, source_url)
     LOGGER.info(
         "Updating artifact %s (%s) from %s into s3://%s/%s",
@@ -509,12 +594,11 @@ def _handle_spec_artifact_update(
         bucket_name,
         object_key,
     )
-    s3_client.put_object(
-        Bucket=bucket_name,
-        Key=object_key,
-        Body=artifact_body,
-        ContentType=content_type,
-        Metadata={
+    size_bytes, checksum, content_type = _stream_download_to_s3(
+        source_url,
+        bucket_name,
+        object_key,
+        metadata={
             "artifact_id": artifact_id,
             "artifact_type": artifact_type,
             "source_url": source_url,
@@ -523,7 +607,6 @@ def _handle_spec_artifact_update(
 
     now = datetime.now(timezone.utc).isoformat()
     download_url = _build_download_url(bucket_name, object_key)
-    size_bytes = len(artifact_body)
     updated_item = _build_spec_registry_item(
         artifact_type,
         artifact_id,
