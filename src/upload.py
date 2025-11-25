@@ -488,6 +488,16 @@ def _handle_spec_artifact_update(
                 exc,
             )
 
+    mutable_existing = copy.deepcopy(existing)
+    if codebase_override:
+        existing_codebase = _merge_with_defaults(mutable_existing.get("codebase"), _SPEC_CODEBASE_DEFAULTS)
+        existing_codebase.update({k: v for k, v in codebase_override.items() if v is not None})
+        mutable_existing["codebase"] = existing_codebase
+    if dataset_override:
+        existing_dataset = _merge_with_defaults(mutable_existing.get("dataset"), _SPEC_DATASET_DEFAULTS)
+        existing_dataset.update({k: v for k, v in dataset_override.items() if v is not None})
+        mutable_existing["dataset"] = existing_dataset
+
     artifact_body, content_type = _download_artifact_from_url(source_url)
     checksum = hashlib.sha256(artifact_body).hexdigest()
     object_key = _build_artifact_s3_key(artifact_type, artifact_id, source_url)
@@ -525,16 +535,8 @@ def _handle_spec_artifact_update(
         content_type,
         size_bytes,
         checksum,
-        existing=existing,
+        existing=mutable_existing,
     )
-    if codebase_override:
-        merged_codebase = _merge_with_defaults(updated_item.get("codebase"), _SPEC_CODEBASE_DEFAULTS)
-        merged_codebase.update({k: v for k, v in codebase_override.items() if v is not None})
-        updated_item["codebase"] = merged_codebase
-    if dataset_override:
-        merged_dataset = _merge_with_defaults(updated_item.get("dataset"), _SPEC_DATASET_DEFAULTS)
-        merged_dataset.update({k: v for k, v in dataset_override.items() if v is not None})
-        updated_item["dataset"] = merged_dataset
     updated_item.setdefault("created_at", existing.get("created_at") if existing else now)
     updated_item["updated_at"] = now
 
