@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
 BEDROCK_MODEL_ID = os.getenv(
     "BEDROCK_MODEL_ID",
-    "anthropic.claude-3-sonnet-20240229-v1:0",
+    "meta.llama3-8b-instruct-v1:0",
 )
 
 try:  # pragma: no cover - exercised only when AWS creds are present
@@ -107,20 +107,10 @@ class RampUpMetric(BaseMetric):
             raise RuntimeError("Bedrock client is not configured")
 
         body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 200,
+            "prompt": f"<s>[INST] {prompt} [/INST]",
+            "max_gen_len": 600,
             "temperature": 0.0,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt,
-                        }
-                    ],
-                }
-            ],
+            "top_p": 0.9,
         }
 
         response = client.invoke_model(
@@ -136,19 +126,13 @@ class RampUpMetric(BaseMetric):
             else json.loads(raw)
         )
 
-        content = payload.get("content", [])
-        text_parts = [
-            piece.get("text", "")
-            for piece in content
-            if isinstance(piece, dict) and piece.get("type") == "text"
-        ]
-        if not text_parts and isinstance(payload.get("output"), list):
-            for message in payload["output"]:
-                for block in message.get("content", []):
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
+        generation = payload.get("generation")
+        if not generation and "generations" in payload:
+            generations = payload.get("generations") or []
+            if generations:
+                generation = generations[0].get("text")
 
-        combined = "\n".join(filter(None, text_parts)).strip()
+        combined = (generation or "").strip()
         return self._parse_score(combined)
 
     def _parse_score(self, raw_text: str) -> Optional[float]:

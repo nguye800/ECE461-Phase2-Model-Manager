@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main  # Deploy when code is merged to main
-      - rate_dev
+      - upload_dev
 
 permissions:
   id-token: write      # needed for OIDC
@@ -13,14 +13,23 @@ permissions:
 env:
   AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: 965919626283
+  ECR_REPOSITORY: ece461/function-containers
+
   RATE_LAMBDA_FUNCTION_NAME: Rate
-  RATE_ECR_REPOSITORY: ece461/function-containers
   RATE_DOCKERFILE: dockerfiles/dockerfile.rate
   RATE_IMAGE_TAG: rate
+
   ENQUEUE_LAMBDA_FUNCTION_NAME: Enqueue-Rate
-  ENQUEUE_ECR_REPOSITORY: ece461/function-containers
   ENQUEUE_DOCKERFILE: dockerfiles/dockerfile.enqueue_rate
   ENQUEUE_IMAGE_TAG: enqueue-rate
+
+  UPLOAD_DOCKERFILE: dockerfiles/dockerfile.upload
+  UPLOAD_IMAGE_TAG: upload-latest
+  UPLOAD_LAMBDA_FUNCTION_NAME: Upload
+
+  METADATA_DOCKERFILE: dockerfiles/dockerfile.metadata
+  METADATA_IMAGE_TAG: metadata-latest
+  METADATA_LAMBDA_FUNCTION_NAME: Metadata
 
 jobs:
   deploy:
@@ -61,32 +70,62 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           docker build -f ${{ env.RATE_DOCKERFILE }} \
-            -t $ECR_REGISTRY/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }} .
-          docker push $ECR_REGISTRY/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
 
       - name: Build, tag, and push enqueue-rate Docker image to ECR
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           docker build -f ${{ env.ENQUEUE_DOCKERFILE }} \
-            -t $ECR_REGISTRY/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }} .
-          docker push $ECR_REGISTRY/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+
+      - name: Build, tag, and push upload Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.UPLOAD_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
+      
+      - name: Build, tag, and push metadata Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.METADATA_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
 
       # Uncomment after the Lambda exists and you want automatic deploys
       - name: Update rate Lambda function to new image
         run: |
           aws lambda update-function-code \
             --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }} \
-            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.RATE_ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
 
       - name: Update enqueue_rate Lambda function to new image
         run: |
           aws lambda update-function-code \
             --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }} \
-            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ENQUEUE_ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+
+      - name: Update upload Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
+      
+      - name: Update metadata Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
 
       # Optional: uncomment once the Lambda is live
       - name: Confirm deployment
         run: |
           aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }}

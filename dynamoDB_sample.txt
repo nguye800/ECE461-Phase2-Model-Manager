@@ -1,9 +1,9 @@
 # DynamoDB item (put_item)
 {
-  "pk": { "S": "MODEL#01JBM6A4F9R0G7YX2Q3MZK1N7P" },
+  "pk": { "S": "MODEL#01JBM6A4F9R0G7YX2Q3MZK1N8A" },
   "sk": { "S": "META" },
   "type": { "S": "MODEL" },
-  "model_id": { "S": "01JBM6A4F9R0G7YX2Q3MZK1N7P" },
+  "model_id": { "S": "01JBM6A4F9R0G7YX2Q3MZK1N8A" },
   "name": { "S": "AdapterHub/bert-base-uncased-pf-imdb" },
   "name_lc": { "S": "adapterhub/bert-base-uncased-pf-imdb" },
   "model_url": { "S": "https://huggingface.co/AdapterHub/bert-base-uncased-pf-imdb" },

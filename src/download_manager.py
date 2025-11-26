@@ -3,6 +3,8 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Optional, Tuple
+from urllib.parse import urlparse
+
 from huggingface_hub import snapshot_download
 import git
 from metric import ModelURLs
@@ -35,24 +37,46 @@ class DownloadManager:
 
     def _extract_repo_id(self, url: str) -> str:
         """
-        Extract repository ID from HuggingFace URL.
-
-        Args:
-            url: HuggingFace model/dataset URL
-
-        Returns:
-            Repository ID (e.g., "username/model-name")
+        Extract repository ID from HuggingFace URL or repo identifier.
         """
-        # Remove common URL patterns
-        repo_id = url.replace("https://huggingface.co/", "")
+        if not url:
+            raise ValueError("Repository URL is required")
+
+        candidate = url.strip()
+        parsed = urlparse(candidate)
+
+        if parsed.scheme and parsed.netloc:
+            if "huggingface.co" not in parsed.netloc:
+                # Not a Hugging Face URL; return last path component
+                path_part = parsed.path.strip("/") or parsed.netloc
+                return path_part.split("/")[-1]
+
+            path_segments = [segment for segment in parsed.path.strip("/").split("/") if segment]
+            cleaned_segments = []
+            skip_prefixes = {"datasets", "models", "spaces"}
+            for segment in path_segments:
+                if not cleaned_segments and segment in skip_prefixes:
+                    continue
+                cleaned_segments.append(segment)
+
+            if not cleaned_segments:
+                raise ValueError(f"Unable to extract repo id from URL: {url}")
+
+            repo_id = "/".join(cleaned_segments[:2])
+        else:
+            repo_id = candidate.strip("/")
+
         repo_id = repo_id.replace("/tree/main", "")
         repo_id = repo_id.replace("/blob/main", "")
-        repo_id = repo_id.replace("datasets/", "")  # Handle dataset URLs
+        repo_id = repo_id.replace("/resolve/main", "")
         repo_id = repo_id.rstrip("/")
-        if "/" in repo_id:
-            parts = repo_id.split("/")
-            if len(parts) > 2:
-                repo_id = "/".join(parts[:2])
+
+        parts = repo_id.split("/")
+        if len(parts) > 2:
+            repo_id = "/".join(parts[:2])
+
+        if not repo_id or repo_id == "https:":
+            raise ValueError(f"Unable to extract repo id from URL: {url}")
 
         return repo_id
 

@@ -59,3 +59,12 @@ packages = [
     "@types/react@latest",
     "@types/react-dom@latest",
 ]
+
+
+[tool.pytest.ini_options]
+python_files = [
+    "tests/test_*.py"
+]
+testpaths = [
+    "tests"
+]
