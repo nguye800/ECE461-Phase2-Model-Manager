@@ -402,7 +402,7 @@ class ArtifactRepository:
     def fetch_by_name(self, name: str) -> list[dict]:
         try:
             response = self.table.query(
-                IndexName="NameIndex",
+                IndexName="GSI_ALPHABET_LISTING"
                 KeyConditionExpression=Key("name_lc").eq(name.lower()),
                 FilterExpression=Attr("type").eq("MODEL") & Attr("sk").eq("META"),
             )
