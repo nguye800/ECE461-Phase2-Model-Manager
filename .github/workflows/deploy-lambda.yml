@@ -15,7 +15,7 @@ env:
   ECR_REPOSITORY: ece461/function-containers
 
   SEARCH_LAMBDA_FUNCTION_NAME: search
-  SEARCH_DOCKERFILE: Dockerfile
+  SEARCH_DOCKERFILE: dockerfiles/dockerfile.search
   SEARCH_IMAGE_TAG: search-latest
   
   RATE_LAMBDA_FUNCTION_NAME: Rate
@@ -193,10 +193,7 @@ jobs:
 
       # Optional: uncomment once the Lambda is live
       - name: Confirm deployment
-      - name: Confirm image pushed
         run: |
-          aws ecr describe-images \
-            --repository-name ${{ env.ECR_REPOSITORY }} \
           aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }}
