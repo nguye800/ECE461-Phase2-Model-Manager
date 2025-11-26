@@ -4,17 +4,30 @@ from __future__ import annotations
 import base64
 import json
 import os
+import urllib.error
+import urllib.request
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 ARTIFACTS_TABLE_NAME = os.environ.get("ARTIFACTS_DDB_TABLE", "ModelArtifacts")
 ARTIFACTS_DDB_REGION = os.environ.get("ARTIFACTS_DDB_REGION")
-COST_PER_GB = float(os.environ.get("ARTIFACT_COST_PER_GB", "0.12"))
 DEFAULT_MODEL_BUCKET = os.environ.get("MODEL_BUCKET_NAME")
+S3_CLIENT = boto3.client("s3")
+
+BYTES_IN_MB = 1024 * 1024
+
+
+class MissingDownloadLocation(Exception):
+    """Raised when an artifact does not include an S3 download reference."""
+
+
+class ObjectSizeResolutionError(Exception):
+    """Raised when an S3 object's size cannot be determined."""
 
 
 def _dynamodb():
@@ -77,13 +90,8 @@ def _get_audits(artifact_type: str, artifact_id: str):
     return _convert(response.get("Items", []))
 
 
-def _calculate_cost(metadata: Dict[str, Any]):
-    size_gb = float(metadata.get("gb_size_of_model") or 0)
-    return round(size_gb * COST_PER_GB, 4)
-
-
-def _evaluate_license(metadata: Dict[str, Any]):
-    license_text = (metadata.get("license") or "").lower()
+def _evaluate_license_text(license_text: Optional[str]) -> Dict[str, Any]:
+    license_text = (license_text or "").lower()
     permissive = {"apache-2.0", "mit", "bsd-3-clause", "bsd-2-clause"}
     restricted = {"gpl-3.0", "agpl-3.0"}
 
@@ -109,6 +117,42 @@ def _evaluate_license(metadata: Dict[str, Any]):
     }
 
 
+def _evaluate_license(metadata: Dict[str, Any]):
+    return _evaluate_license_text(metadata.get("license"))
+
+
+def _fetch_github_license_identifier(github_url: str) -> Optional[str]:
+    try:
+        parsed = urlparse(github_url)
+    except ValueError:
+        return None
+    if "github.com" not in parsed.netloc.lower():
+        return None
+    path_parts = [segment for segment in parsed.path.split("/") if segment]
+    if len(path_parts) < 2:
+        return None
+    owner, repo = path_parts[0], path_parts[1]
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/license"
+    request = urllib.request.Request(
+        api_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "metadata-lambda",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError):
+        return None
+
+    license_info = payload.get("license") or {}
+    spdx = license_info.get("spdx_id")
+    if not spdx or spdx.upper() == "NOASSERTION":
+        return None
+    return spdx.lower()
+
+
 def _parse_bool(value: Optional[str], default: bool = True) -> bool:
     if value is None:
         return default
@@ -124,16 +168,52 @@ def _parse_s3_uri(value: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     return DEFAULT_MODEL_BUCKET, value
 
 
-def _resolve_artifact_location(metadata: Dict[str, Any], artifact_type: str):
+def _resolve_artifact_location(
+    metadata: Dict[str, Any], artifact_type: str, *, strict: bool = False
+) -> Tuple[Optional[str], Optional[str]]:
     assets = metadata.get("assets") or {}
-    if artifact_type == "model":
-        key = assets.get("model_zip_key") or metadata.get("s3_location_of_model_zip")
-    else:
-        key = assets.get(f"{artifact_type}_key")
     bucket = assets.get("bucket")
-    b, k = _parse_s3_uri(key)
-    bucket = bucket or b
-    return bucket, k
+
+    def _candidate_keys() -> List[str]:
+        base_keys = [
+            f"{artifact_type}_key",
+            f"{artifact_type}_zip_key",
+        ]
+        if artifact_type == "model":
+            return ["model_zip_key", "key"] + base_keys
+        if artifact_type == "code":
+            return base_keys + ["codebase_key"]
+        if artifact_type == "codebase":
+            return ["codebase_key", "code_key"]
+        return base_keys
+
+    key = None
+    for candidate in _candidate_keys():
+        candidate_value = assets.get(candidate)
+        if candidate_value:
+            key = candidate_value
+            break
+
+    if not key and artifact_type == "model":
+        key = metadata.get("s3_location_of_model_zip")
+    if not key:
+        fallback_fields = [
+            f"{artifact_type}_s3_key",
+            f"{artifact_type}_location",
+        ]
+        for field in fallback_fields:
+            value = metadata.get(field)
+            if value:
+                key = value
+                break
+
+    bucket_override, normalized_key = _parse_s3_uri(key)
+    bucket = bucket or bucket_override
+    if strict and (not bucket or not normalized_key):
+        raise MissingDownloadLocation(
+            f"Artifact '{metadata.get('model_id')}' is missing an S3 download reference for '{artifact_type}'."
+        )
+    return bucket, normalized_key
 
 
 def _build_download_url(bucket: Optional[str], key: Optional[str]) -> Optional[str]:
@@ -172,6 +252,23 @@ def _build_artifact_envelope(artifact_type: str, item: Dict[str, Any]) -> Dict[s
     data_payload = {"url": source_url, "download_url": download_url}
 
     return {"metadata": metadata_payload, "data": data_payload}
+
+
+def _object_size_mb(bucket: str, key: str) -> float:
+    if not bucket or not key:
+        raise MissingDownloadLocation("Missing S3 location for artifact component.")
+    try:
+        response = S3_CLIENT.head_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        raise ObjectSizeResolutionError(
+            f"Unable to determine size for s3://{bucket}/{key}"
+        ) from exc
+    content_length = response.get("ContentLength")
+    if content_length is None:
+        raise ObjectSizeResolutionError(
+            f"S3 object s3://{bucket}/{key} is missing ContentLength metadata."
+        )
+    return round(content_length / float(BYTES_IN_MB), 4)
 
 
 def _parse_json_body(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -239,10 +336,19 @@ def _build_lineage_graph(
 def _build_cost_payload(
     artifact_id: str, artifact_type: str, metadata_item: Dict[str, Any], include_dependency: bool
 ) -> Dict[str, Any]:
-    cost = _calculate_cost(metadata_item)
-    entry: Dict[str, Any] = {"total_cost": cost}
+    bucket, key = _resolve_artifact_location(metadata_item, artifact_type, strict=True)
+    base_cost = _object_size_mb(bucket, key)
+    total_cost = base_cost
+    entry: Dict[str, Any] = {"total_cost": round(total_cost, 4)}
+
     if include_dependency:
-        entry["standalone_cost"] = cost
+        entry["standalone_cost"] = round(base_cost, 4)
+        for dependency_type in ("dataset", "code", "codebase"):
+            dep_bucket, dep_key = _resolve_artifact_location(metadata_item, dependency_type)
+            if dep_bucket and dep_key:
+                total_cost += _object_size_mb(dep_bucket, dep_key)
+        entry["total_cost"] = round(total_cost, 4)
+
     return {artifact_id: entry}
 
 
@@ -295,19 +401,27 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
         artifact_type, artifact_id = segments[1], segments[2]
         action = segments[3]
         metadata_item = _get_artifact(artifact_type, artifact_id)
+
+        if method == "GET" and action == "cost":
+            if not metadata_item:
+                return _response(400, {"message": f"Artifact id '{artifact_id}' not found."})
+            dependency_flag = _parse_bool(query.get("dependency"), False)
+            try:
+                payload = _build_cost_payload(
+                    artifact_id, artifact_type, metadata_item, dependency_flag
+                )
+            except MissingDownloadLocation as exc:
+                return _response(404, {"message": str(exc)})
+            except ObjectSizeResolutionError as exc:
+                return _response(500, {"message": str(exc)})
+            return _response(200, payload)
+
         if not metadata_item:
             return _not_found(artifact_type, artifact_id)
 
         if method == "GET" and action == "lineage":
             graph = _build_lineage_graph(artifact_id, artifact_type, metadata_item)
             return _response(200, graph)
-
-        if method == "GET" and action == "cost":
-            dependency_flag = _parse_bool(query.get("dependency"), False)
-            payload = _build_cost_payload(
-                artifact_id, artifact_type, metadata_item, dependency_flag
-            )
-            return _response(200, payload)
 
         if method == "GET" and action == "audit":
             audits = metadata_item.get("audits")
@@ -326,13 +440,20 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
             if not github_url or "github.com" not in github_url:
                 return _response(400, {"message": "Field 'github_url' must be a GitHub URL."})
 
-            evaluation = _evaluate_license(metadata_item)
+            github_license = _fetch_github_license_identifier(github_url)
+            if not github_license:
+                return _response(502, {"message": "External license information could not be retrieved."})
+
+            evaluation = _evaluate_license_text(github_license)
             hugging_face = "huggingface.co" in str(metadata_item.get("model_url", "")).lower()
             compatible = bool(
                 evaluation.get("fine_tune_allowed")
                 and evaluation.get("inference_allowed")
                 and hugging_face
             )
+            metadata_license = (metadata_item.get("license") or "").lower()
+            if metadata_license and metadata_license != github_license:
+                compatible = False
             return _response(200, compatible)
 
     return _response(
