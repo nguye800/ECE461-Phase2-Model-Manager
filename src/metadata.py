@@ -5,7 +5,7 @@ import base64
 import json
 import os
 from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
 import boto3
@@ -14,7 +14,6 @@ from boto3.dynamodb.conditions import Key
 ARTIFACTS_TABLE_NAME = os.environ.get("ARTIFACTS_DDB_TABLE", "ModelArtifacts")
 ARTIFACTS_DDB_REGION = os.environ.get("ARTIFACTS_DDB_REGION")
 COST_PER_GB = float(os.environ.get("ARTIFACT_COST_PER_GB", "0.12"))
-DEFAULT_PRESIGN_TTL = int(os.environ.get("DOWNLOAD_PRESIGN_EXPIRATION", "3600"))
 DEFAULT_MODEL_BUCKET = os.environ.get("MODEL_BUCKET_NAME")
 
 
@@ -31,10 +30,6 @@ def _table():
 # Backwards-compat aliases for tests/legacy imports
 def _get_table():  # pragma: no cover - shim for tests
     return _table()
-
-
-def _s3_client():
-    return boto3.client("s3")
 
 
 def _response(status: int, body: Dict[str, Any]):
@@ -120,14 +115,6 @@ def _parse_bool(value: Optional[str], default: bool = True) -> bool:
     return value.lower() in {"1", "true", "t", "yes", "y"}
 
 
-def _sanitize_metadata(item: Dict[str, Any]) -> Dict[str, Any]:
-    sanitized = dict(item)
-    sanitized.pop("assets", None)
-    sanitized.pop("s3_location_of_model_zip", None)
-    sanitized.pop("s3_location_of_cloudwatch_log_for_database_entry", None)
-    return sanitized
-
-
 def _parse_s3_uri(value: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     if not value:
         return None, None
@@ -149,73 +136,138 @@ def _resolve_artifact_location(metadata: Dict[str, Any], artifact_type: str):
     return bucket, k
 
 
-def _build_artifact_response(
-    artifact_type: str,
-    artifact_id: str,
-    metadata: Dict[str, Any],
-    *,
-    include_logs: bool,
-    inline: bool,
-    presign_ttl: int,
-) -> Dict[str, Any]:
-    bucket, key = _resolve_artifact_location(metadata, artifact_type)
+def _build_download_url(bucket: Optional[str], key: Optional[str]) -> Optional[str]:
     if not bucket or not key:
-        raise ValueError("Artifact does not have an associated object key")
+        return None
+    return f"https://{bucket}.s3.amazonaws.com/{key}"
 
-    s3 = _s3_client()
-    head = s3.head_object(Bucket=bucket, Key=key)
-    size_bytes = head.get("ContentLength", 0)
-    presigned = s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": bucket, "Key": key},
-        ExpiresIn=presign_ttl,
-    )
 
-    artifact_entry: Dict[str, Any] = {
-        "type": artifact_type,
-        "bucket": bucket,
-        "key": key,
-        "s3_url": f"s3://{bucket}/{key}",
-        "presigned_url": presigned,
-        "size_bytes": size_bytes,
+def _build_artifact_envelope(artifact_type: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    metadata_block = item.get("metadata") or {}
+    artifact_id = metadata_block.get("id") or item.get("model_id")
+    name = metadata_block.get("name") or item.get("name") or artifact_id
+    type_value = metadata_block.get("type") or artifact_type
+
+    if not artifact_id:
+        raise ValueError("Artifact does not contain a model identifier.")
+
+    metadata_payload = {
+        "name": name,
+        "id": artifact_id,
+        "type": type_value,
     }
 
-    if inline:
-        obj = s3.get_object(Bucket=bucket, Key=key)
-        artifact_entry["data"] = base64.b64encode(obj["Body"].read()).decode("utf-8")
+    data_block = item.get("data") or {}
+    source_url = data_block.get("url") or item.get("model_url")
+    download_url = data_block.get("download_url")
 
-    entries = [artifact_entry]
+    bucket, key = _resolve_artifact_location(item, artifact_type)
+    download_url = download_url or _build_download_url(bucket, key)
 
-    if include_logs:
-        log_bucket, log_key = _parse_s3_uri(
-            metadata.get("assets", {}).get("log_key")
-            or metadata.get("s3_location_of_cloudwatch_log_for_database_entry")
-        )
-        if log_bucket and log_key:
-            log_presigned = s3.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": log_bucket, "Key": log_key},
-                ExpiresIn=presign_ttl,
-            )
-            entries.append(
-                {
-                    "type": "log",
-                    "bucket": log_bucket,
-                    "key": log_key,
-                    "s3_url": f"s3://{log_bucket}/{log_key}",
-                    "presigned_url": log_presigned,
-                }
-            )
+    if not source_url:
+        raise ValueError("Artifact does not contain a source url.")
+    if not download_url:
+        raise ValueError("Artifact does not have a download url.")
 
-    sanitized_metadata = _sanitize_metadata(metadata)
-    return {
-        "status": "success",
-        "artifact_type": artifact_type,
+    data_payload = {"url": source_url, "download_url": download_url}
+
+    return {"metadata": metadata_payload, "data": data_payload}
+
+
+def _parse_json_body(event: Dict[str, Any]) -> Dict[str, Any]:
+    body = event.get("body")
+    if body is None:
+        raise ValueError("Request body is required.")
+    if event.get("isBase64Encoded"):
+        body = base64.b64decode(body)
+    if isinstance(body, bytes):
+        body = body.decode("utf-8")
+    if not body:
+        raise ValueError("Request body is required.")
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Request body must be valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object.")
+    return payload
+
+
+def _build_lineage_graph(
+    artifact_id: str, artifact_type: str, metadata_item: Dict[str, Any]
+) -> Dict[str, List[Dict[str, Any]]]:
+    nodes: Dict[str, Dict[str, Any]] = {}
+    edges: List[Dict[str, Any]] = []
+
+    nodes[artifact_id] = {
         "artifact_id": artifact_id,
-        "metadata": sanitized_metadata,
-        "artifacts": entries,
-        "total_artifact_size_bytes": sum(e.get("size_bytes", 0) for e in entries),
+        "name": metadata_item.get("name") or metadata_item.get("metadata", {}).get("name"),
+        "source": "registry",
     }
+
+    base_models = metadata_item.get("base_models") or []
+    for index, base in enumerate(base_models):
+        base_id = (
+            base.get("artifact_id")
+            or base.get("model_id")
+            or base.get("id")
+            or f"{artifact_id}-base-{index}"
+        )
+        if base_id not in nodes:
+            nodes[base_id] = {
+                "artifact_id": base_id,
+                "name": base.get("name") or base.get("model_id") or base_id,
+                "source": base.get("source") or "base_model",
+                "metadata": {
+                    k: v
+                    for k, v in base.items()
+                    if k not in {"artifact_id", "model_id", "name", "source"}
+                }
+                or None,
+            }
+        edges.append(
+            {
+                "from_node_artifact_id": base_id,
+                "to_node_artifact_id": artifact_id,
+                "relationship": base.get("relation") or "base_model",
+            }
+        )
+
+    return {"nodes": list(nodes.values()), "edges": edges}
+
+
+def _build_cost_payload(
+    artifact_id: str, artifact_type: str, metadata_item: Dict[str, Any], include_dependency: bool
+) -> Dict[str, Any]:
+    cost = _calculate_cost(metadata_item)
+    entry: Dict[str, Any] = {"total_cost": cost}
+    if include_dependency:
+        entry["standalone_cost"] = cost
+    return {artifact_id: entry}
+
+
+def _format_audit_entries(
+    entries: List[Dict[str, Any]], artifact_type: str, artifact_id: str
+) -> List[Dict[str, Any]]:
+    formatted: List[Dict[str, Any]] = []
+    for entry in entries:
+        user = entry.get("user") or {}
+        if not user and entry.get("user_name"):
+            user = {"name": entry.get("user_name"), "is_admin": entry.get("user_is_admin", False)}
+        artifact = entry.get("artifact") or {
+            "name": entry.get("artifact_name") or entry.get("name"),
+            "id": entry.get("artifact_id") or artifact_id,
+            "type": entry.get("artifact_type") or artifact_type,
+        }
+        formatted.append(
+            {
+                "user": user or {"name": "unknown", "is_admin": False},
+                "date": entry.get("date") or entry.get("timestamp") or entry.get("created_at"),
+                "artifact": artifact,
+                "action": entry.get("action") or entry.get("event") or "AUDIT",
+            }
+        )
+    return formatted
 
 
 def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
@@ -234,14 +286,7 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
         if not item:
             return _not_found(artifact_type, artifact_id)
         try:
-            payload = _build_artifact_response(
-                artifact_type,
-                artifact_id,
-                item,
-                include_logs=_parse_bool(query.get("include_logs"), True),
-                inline=_parse_bool(query.get("inline"), False),
-                presign_ttl=int(query.get("presign_ttl", DEFAULT_PRESIGN_TTL)),
-            )
+            payload = _build_artifact_envelope(artifact_type, item)
         except ValueError as exc:
             return _response(400, {"message": str(exc)})
         return _response(200, payload)
@@ -254,30 +299,41 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
             return _not_found(artifact_type, artifact_id)
 
         if method == "GET" and action == "lineage":
-            return _response(
-                200,
-                {"model_id": artifact_id, "base_models": metadata_item.get("base_models", [])},
-            )
+            graph = _build_lineage_graph(artifact_id, artifact_type, metadata_item)
+            return _response(200, graph)
 
         if method == "GET" and action == "cost":
-            cost = _calculate_cost(metadata_item)
-            return _response(
-                200,
-                {
-                    "model_id": artifact_id,
-                    "artifact_type": artifact_type,
-                    "estimated_cost_usd": cost,
-                    "unit_cost_per_gb": COST_PER_GB,
-                },
+            dependency_flag = _parse_bool(query.get("dependency"), False)
+            payload = _build_cost_payload(
+                artifact_id, artifact_type, metadata_item, dependency_flag
             )
+            return _response(200, payload)
 
         if method == "GET" and action == "audit":
-            audits = _get_audits(artifact_type, artifact_id)
-            return _response(200, {"entries": audits})
+            audits = metadata_item.get("audits")
+            if not audits:
+                audits = _get_audits(artifact_type, artifact_id)
+            formatted = _format_audit_entries(audits, artifact_type, artifact_id)
+            return _response(200, formatted)
 
         if method == "POST" and action == "license-check" and artifact_type == "model":
+            try:
+                payload = _parse_json_body(event)
+            except ValueError as exc:
+                return _response(400, {"message": str(exc)})
+
+            github_url = payload.get("github_url")
+            if not github_url or "github.com" not in github_url:
+                return _response(400, {"message": "Field 'github_url' must be a GitHub URL."})
+
             evaluation = _evaluate_license(metadata_item)
-            return _response(200, {"model_id": artifact_id, "result": evaluation})
+            hugging_face = "huggingface.co" in str(metadata_item.get("model_url", "")).lower()
+            compatible = bool(
+                evaluation.get("fine_tune_allowed")
+                and evaluation.get("inference_allowed")
+                and hugging_face
+            )
+            return _response(200, compatible)
 
     return _response(
         400,

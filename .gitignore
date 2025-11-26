@@ -21,3 +21,9 @@ srclocal_storage
 models.db
 run-env/
 demo-model.zip
+node_modules/
+**/node_modules/
+# Next.js build artifacts and caches
+.next/
+.next/cache/
+.next/static/webpack/

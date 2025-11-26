@@ -45,6 +45,7 @@ OPENAPI_METRIC_FIELDS: Tuple[str, ...] = (
     "bus_factor",
     "performance_claims",
     "license",
+    "size_score",
     "dataset_and_code",
     "dataset_quality",
     "code_quality",
@@ -73,8 +74,22 @@ class RateException(Exception):
         self.message = message
 
 
+_TABLE: Optional[Any] = None
+
+
+def _get_table() -> Any:
+    global _TABLE
+    table_name = os.getenv("MODELS_TABLE")
+    if not table_name:
+        raise RateException(500, "configuration error: MODELS_TABLE not set")
+    if _TABLE is None:
+        dynamo = boto3.resource("dynamodb")
+        _TABLE = dynamo.Table(table_name)
+    return _TABLE
+
+
 def handler(event: Any, context: Any) -> Dict[str, Any]:
-    """Lambda handler."""
+    """Lambda handler for SQS batch events."""
     if isinstance(event, str):
         try:
             event = json.loads(event)
@@ -83,25 +98,37 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
     elif event is None:
         event = {}
 
-    try:
-        # _require_auth(event) # skipping auth since we haven't set up tokens yet
-        model_id = _extract_model_id(event)
-    except RateException as exc:
-        return _json_response(exc.status_code, {"message": exc.message})
+    if "Records" not in event:
+        logger.warning("rate handler invoked without SQS Records payload.")
+        return {"batchItemFailures": []}
 
-    table_name = os.getenv("MODELS_TABLE")
-    if not table_name:
-        logger.error("Environment variable MODELS_TABLE is required.")
-        return _json_response(
-            500, {"message": "configuration error: MODELS_TABLE not set"}
-        )
+    failures: List[Dict[str, str]] = []
+    for record in event.get("Records", []):
+        message_id = record.get("messageId")
+        try:
+            body = record.get("body") or "{}"
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                payload = {}
+            model_id = payload.get("model_id") or payload.get("id")
+            if not model_id:
+                raise RateException(400, "missing model_id in SQS message")
+            _score_model(model_id)
+        except RateException as exc:
+            logger.error("Failed to score model from SQS: %s", exc)
+            if message_id:
+                failures.append({"itemIdentifier": message_id})
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("Unexpected error processing SQS record")
+            if message_id:
+                failures.append({"itemIdentifier": message_id})
+    return {"batchItemFailures": failures}
 
-    dynamo = boto3.resource("dynamodb")
-    table = dynamo.Table(table_name)
 
+def _score_model(model_id: str) -> Dict[str, Any]:
+    table = _get_table()
     item: Optional[Dict[str, Any]] = None
-    key: Optional[Dict[str, str]] = None
-
     try:
         item, key = _fetch_model_item(table, model_id)
         config = _build_config()
@@ -198,32 +225,55 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
         if eligibility_reason:
             eligibility_payload["reason"] = eligibility_reason
 
+        failing_metrics = [
+            name
+            for name, data in breakdown.items()
+            if float(data.get("value", 0.0)) < 0.5
+        ]
+        if failing_metrics:
+            approval_payload: Dict[str, Any] = {
+                "visible": False,
+                "status": "REJECTED",
+                "reason": f"Metrics below 0.5: {', '.join(failing_metrics)}",
+            }
+        else:
+            approval_payload = {
+                "visible": True,
+                "status": "APPROVED",
+                "reason": "All metrics meet minimum threshold",
+            }
+
         record = deepcopy(item)
         record["metrics"] = _decimalize(metrics_payload)
         record["scoring"] = _decimalize(scoring_payload)
         record["eligibility"] = _decimalize(eligibility_payload)
+        record["approval"] = _decimalize(approval_payload)
         record["updated_at"] = now_iso
+        _append_audit_entry(
+            record,
+            action="RATE",
+            user={"name": "scoring-lambda", "is_admin": True},
+        )
 
         table.put_item(Item=record)
 
-        response_payload = _build_openapi_response(
-            item=item,
+        return _build_openapi_response(
+            item=record,
             model_id=model_id,
             net_score=net_score,
             net_score_latency=net_score_latency_ms,
             breakdown=breakdown,
         )
-        return _json_response(200, response_payload)
 
     except RateException as exc:
-        if item is not None and key is not None:
+        if item is not None:
             _record_failure(table, item, exc.message)
-        return _json_response(exc.status_code, {"message": exc.message})
+        raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Rating failed for %s", model_id)
-        if item is not None and key is not None:
+        if item is not None:
             _record_failure(table, item, str(exc))
-        return _json_response(500, {"message": "rating system failure"})
+        raise
 
 
 def _require_auth(event: Dict[str, Any]) -> None:
@@ -240,42 +290,6 @@ def _require_auth(event: Dict[str, Any]) -> None:
     if token != expected_token:
         raise RateException(403, "authentication failed")
 
-
-def _extract_model_id(event: Dict[str, Any]) -> str:
-    candidates: List[Optional[str]] = []
-    path_params = event.get("pathParameters") or {}
-    query_params = event.get("queryStringParameters") or {}
-    for source in (path_params, query_params):
-        candidates.extend(
-            [
-                source.get("model_id"),
-                source.get("modelId"),
-                source.get("id"),
-            ]
-        )
-
-    body = event.get("body")
-    if body and not any(candidates):
-        try:
-            if event.get("isBase64Encoded"):
-                body = base64.b64decode(body).decode("utf-8")
-            payload = json.loads(body)
-            candidates.extend(
-                [
-                    payload.get("model_id"),
-                    payload.get("modelId"),
-                    payload.get("id"),
-                ]
-            )
-        except (ValueError, json.JSONDecodeError):
-            pass
-
-    for candidate in candidates:
-        if candidate:
-            candidate_str = str(candidate).strip()
-            if candidate_str:
-                return candidate_str
-    raise RateException(400, "missing or invalid model id")
 
 
 def _build_metric_specs() -> List[MetricSpec]:
@@ -522,6 +536,11 @@ def _record_failure(table: Any, item: Dict[str, Any], message: str) -> None:
         record["scoring"] = _decimalize(scoring_payload)
         record["eligibility"] = _decimalize(eligibility_payload)
         record["updated_at"] = now_iso
+        _append_audit_entry(
+            record,
+            action="RATE_FAILED",
+            user={"name": "scoring-lambda", "is_admin": True},
+        )
         table.put_item(Item=record)
     except Exception:  # pragma: no cover - defensive
         logger.exception("Failed to record failure details in DynamoDB")
@@ -587,3 +606,23 @@ def _build_openapi_response(
         response[f"{metric_name}_latency"] = int(metric_entry.get("latency_ms", 0))
 
     return response
+
+
+def _append_audit_entry(
+    item: Dict[str, Any],
+    *,
+    action: str,
+    user: Optional[Dict[str, Any]] = None,
+) -> None:
+    entry = {
+        "user": user or {"name": "system", "is_admin": False},
+        "date": _utc_now_iso(),
+        "artifact": {
+            "name": item.get("name"),
+            "id": item.get("model_id"),
+            "type": item.get("artifact_type") or item.get("type", "MODEL").lower(),
+        },
+        "action": action.upper(),
+    }
+    audits = item.setdefault("audits", [])
+    audits.append(entry)

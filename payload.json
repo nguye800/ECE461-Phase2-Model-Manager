@@ -1,0 +1,43 @@
+{
+  "model_id": "01JBM6A4F9R0G7YX2Q3MZK1N7P",
+  "model_url": "https://huggingface.co/AdapterHub/bert-base-uncased-pf-imdb",
+  "metadata": {
+    "name": "AdapterHub/bert-base-uncased-pf-imdb",
+    "license": "Apache-2.0",
+    "base_models": [
+      {
+        "model_id": "01J6ABCDEF4GHIJKLMNPRSTUVX",
+        "model_url": "https://huggingface.co/google-bert/bert-base-uncased",
+        "relation": "derived_from",
+        "added_at": "2024-10-12T09:31:00Z"
+      },
+      {
+        "model_id": "01J6GHIJKL4MNOPQRSTUVXYZ12",
+        "model_url": "https://huggingface.co/google-bert/bert-base-uncased",
+        "relation": "fine_tuned_from",
+        "added_at": "2025-01-05T18:20:11Z"
+      }
+    ],
+    "dataset": {
+      "url": "https://huggingface.co/datasets/stanfordnlp/imdb",
+      "version": 1,
+      "updated_at": "2025-11-08T23:24:39Z"
+    },
+    "codebase": {
+      "url": "https://github.com/adapter-hub/adapters",
+      "version": 1,
+      "updated_at": "2025-11-08T23:24:39Z"
+    }
+  },
+  "artifacts": [
+    {
+      "name": "model.zip",
+      "source_bucket": "modelzip-logs-artifacts",
+      "source_key": "seed-data/adapter-bert-base-uncased-imdb_pfeiffer-v1.zip",
+      "content_type": "application/zip"
+    }
+  ],
+  "assets": {
+    "model_zip_key": "models/01JBM6A4F9R0G7YX2Q3MZK1N7P/artifacts/adapter-bert-base-uncased-imdb_pfeiffer-v1.zip"
+  }
+}

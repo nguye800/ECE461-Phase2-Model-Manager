@@ -20,4 +20,4 @@ ENV PYTHONPATH=${LAMBDA_TASK_ROOT}/src \
     TRANSFORMERS_CACHE=/tmp/hf-cache
 
 # Default Lambda entry point (can be overridden per-function)
-CMD ["upload.lambda_handler"]
+CMD ["delete_artifact_lambda.handler"]
