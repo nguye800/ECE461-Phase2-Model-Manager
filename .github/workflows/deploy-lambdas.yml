@@ -22,9 +22,6 @@ env:
   METADATA_IMAGE_TAG: metadata-latest
   UPLOAD_LAMBDA_FUNCTION_NAME: Upload
   METADATA_LAMBDA_FUNCTION_NAME: Metadata
-  DELETE_IMAGE_TAG: delete-latest
-  RESET_IMAGE_TAG: reset-latest
-
 
 jobs:
   deploy:
@@ -57,32 +54,21 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      -       - name: Build & push Lambda container images
+      - name: Build & push Lambda container images
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          # Build the base image from Dockerfile.lambda
           docker build -f ${{ env.LAMBDA_DOCKERFILE }} \
             -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} .
-
           docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
             $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
           docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
             $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
-
-          docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
-            $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }}
-          docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }} \
-            $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RESET_IMAGE_TAG }}
-
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.BASE_IMAGE_TAG }}
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
-          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }}
-          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RESET_IMAGE_TAG }}
 
-
-            - name: Promote images to secondary region
+      - name: Promote images to secondary region
         env:
           SECONDARY_REGION: ${{ env.SECONDARY_AWS_REGION }}
           AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
@@ -90,40 +76,21 @@ jobs:
           BASE_IMAGE_TAG: ${{ env.BASE_IMAGE_TAG }}
           UPLOAD_IMAGE_TAG: ${{ env.UPLOAD_IMAGE_TAG }}
           METADATA_IMAGE_TAG: ${{ env.METADATA_IMAGE_TAG }}
-          DELETE_IMAGE_TAG: ${{ env.DELETE_IMAGE_TAG }}
-          RESET_IMAGE_TAG: ${{ env.RESET_IMAGE_TAG }}
-
         run: |
           SECONDARY_REGISTRY=${AWS_ACCOUNT_ID}.dkr.ecr.${SECONDARY_REGION}.amazonaws.com
-
           aws ecr describe-repositories \
             --region "${SECONDARY_REGION}" \
             --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 || \
           aws ecr create-repository \
             --region "${SECONDARY_REGION}" \
             --repository-name "${ECR_REPOSITORY}"
-
           aws ecr get-login-password --region ${SECONDARY_REGION} | docker login --username AWS --password-stdin ${SECONDARY_REGISTRY}
-
-          # Tag base + all function images into secondary region
-          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG} \
-            ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG}
-          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG} \
-            ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG}
-          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${METADATA_IMAGE_TAG} \
-            ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${METADATA_IMAGE_TAG}
-          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${DELETE_IMAGE_TAG} \
-            ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${DELETE_IMAGE_TAG}
-          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${RESET_IMAGE_TAG} \
-            ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${RESET_IMAGE_TAG}
-
-          # Push them
+          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG} ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG}
+          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG} ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG}
+          docker tag ${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${METADATA_IMAGE_TAG} ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${METADATA_IMAGE_TAG}
           docker push ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${BASE_IMAGE_TAG}
           docker push ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${UPLOAD_IMAGE_TAG}
           docker push ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${METADATA_IMAGE_TAG}
-          docker push ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${DELETE_IMAGE_TAG}
-          docker push ${SECONDARY_REGISTRY}/${ECR_REPOSITORY}:${RESET_IMAGE_TAG}
-
 
       # Uncomment once the Upload Lambda exists and you want automatic deployments
       # - name: Update upload Lambda image
