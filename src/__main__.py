@@ -38,6 +38,8 @@ from metrics.tree_score import TreeScoreMetric
 from url_parser import read_url_csv
 from download_manager import DownloadManager
 from infer_dataset import get_linked_dataset_metrics
+from delete_cli import delete_artifact
+from reset_cli import reset_registry
 
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
@@ -155,6 +157,72 @@ def calculate_metrics(model_urls: ModelURLs, config: ConfigContract, stager: Met
 
 
 app = typer.Typer()
+
+DEFAULT_BASE_URL = os.environ.get("REGISTRY_BASE_URL", "")
+DEFAULT_AUTH_TOKEN = os.environ.get("REGISTRY_AUTH_TOKEN", "")
+@app.command()
+def delete(
+    artifact_type: str = typer.Argument(
+        ...,
+        help="Type of artifact to delete: model | dataset | code",
+    ),
+    artifact_id: str = typer.Argument(
+        ...,
+        help="ID of the artifact to delete",
+    ),
+    base_url: str = typer.Option(
+        DEFAULT_BASE_URL,
+        "--base-url",
+        help="Base URL of the registry API (overrides REGISTRY_BASE_URL env var).",
+    ),
+    token: str = typer.Option(
+        DEFAULT_AUTH_TOKEN,
+        "--token",
+        help="X-Authorization token (overrides REGISTRY_AUTH_TOKEN env var).",
+    ),
+):
+    """
+    Delete an artifact from the registry (DELETE /artifacts/{artifact_type}/{id}).
+    """
+    if not base_url:
+        typer.echo("Error: base URL is required. Set REGISTRY_BASE_URL or use --base-url.", err=True)
+        raise typer.Exit(code=1)
+
+    if not token:
+        typer.echo("Error: auth token is required. Set REGISTRY_AUTH_TOKEN or use --token.", err=True)
+        raise typer.Exit(code=1)
+
+    status = delete_artifact(base_url, artifact_type, artifact_id, token)
+    if status != 200:
+        raise typer.Exit(code=1)
+
+@app.command()
+def reset(
+    base_url: str = typer.Option(
+        DEFAULT_BASE_URL,
+        "--base-url",
+        help="Base URL of the registry API (overrides REGISTRY_BASE_URL env var).",
+    ),
+    token: str = typer.Option(
+        DEFAULT_AUTH_TOKEN,
+        "--token",
+        help="X-Authorization token (overrides REGISTRY_AUTH_TOKEN env var).",
+    ),
+):
+    """
+    Reset the registry to its default state (DELETE /reset).
+    """
+    if not base_url:
+        typer.echo("Error: base URL is required. Set REGISTRY_BASE_URL or use --base-url.", err=True)
+        raise typer.Exit(code=1)
+
+    if not token:
+        typer.echo("Error: auth token is required. Set REGISTRY_AUTH_TOKEN or use --token.", err=True)
+        raise typer.Exit(code=1)
+
+    status = reset_registry(base_url, token)
+    if status != 200:
+        raise typer.Exit(code=1)
 
 
 @app.command()

@@ -46,3 +46,25 @@ omit = [
     "tests/*",
     "venv/*"
 ]
+
+[tool.frontend]
+# npm dependencies needed for the React/TSX code under /frontend (documented here; install with npm/yarn)
+manager = "npm"
+packages = [
+    "next@latest",
+    "react@latest",
+    "react-dom@latest",
+    "framer-motion@latest",
+    "lucide-react@latest",
+    "@types/react@latest",
+    "@types/react-dom@latest",
+]
+
+
+[tool.pytest.ini_options]
+python_files = [
+    "tests/test_*.py"
+]
+testpaths = [
+    "tests"
+]

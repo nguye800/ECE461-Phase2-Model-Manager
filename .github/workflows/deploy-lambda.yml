@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - enumerate_dev
 
 permissions:
   id-token: write
@@ -18,6 +17,30 @@ env:
   SEARCH_LAMBDA_FUNCTION_NAME: search
   SEARCH_DOCKERFILE: Dockerfile
   SEARCH_IMAGE_TAG: search-latest
+  
+  RATE_LAMBDA_FUNCTION_NAME: Rate
+  RATE_DOCKERFILE: dockerfiles/dockerfile.rate
+  RATE_IMAGE_TAG: rate
+
+  ENQUEUE_LAMBDA_FUNCTION_NAME: Enqueue-Rate
+  ENQUEUE_DOCKERFILE: dockerfiles/dockerfile.enqueue_rate
+  ENQUEUE_IMAGE_TAG: enqueue-rate
+
+  UPLOAD_DOCKERFILE: dockerfiles/dockerfile.upload
+  UPLOAD_IMAGE_TAG: upload-latest
+  UPLOAD_LAMBDA_FUNCTION_NAME: Upload
+
+  METADATA_DOCKERFILE: dockerfiles/dockerfile.metadata
+  METADATA_IMAGE_TAG: metadata-latest
+  METADATA_LAMBDA_FUNCTION_NAME: Metadata
+
+  RESET_DOCKERFILE: dockerfiles/dockerfile.reset
+  RESET_IMAGE_TAG: reset-latest
+  RESET_LAMBDA_FUNCTION_NAME: model-registry-reset-registry
+
+  DELETE_DOCKERFILE: dockerfiles/dockerfile.delete
+  DELETE_IMAGE_TAG: delete-latest
+  DELETE_LAMBDA_FUNCTION_NAME: model-registry-delete-artifact
 
 jobs:
   deploy:
@@ -58,16 +81,106 @@ jobs:
           docker build -f ${{ env.SEARCH_DOCKERFILE }} \
             -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.SEARCH_IMAGE_TAG }} .
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.SEARCH_IMAGE_TAG }}
+          
+      - name: Build, tag, and push Rate Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |   
+          docker build -f ${{ env.RATE_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
 
-      # Optional — uncomment **after** Search Lambda exists
+      - name: Build, tag, and push enqueue-rate Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.ENQUEUE_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+
+      - name: Build, tag, and push upload Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.UPLOAD_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
+      
+      - name: Build, tag, and push metadata Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.METADATA_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
+
+      - name: Build, tag, and push reset Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.RESET_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RESET_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RESET_IMAGE_TAG }}
+
+      - name: Build, tag, and push delete Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.DELETE_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }}
+
+      # Uncomment after the Lambda exists and you want automatic deploys
+      - name: Update rate Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
+       
+      - name: Update enqueue-rate Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+            
       - name: Update Search Lambda function to new image
         run: |
           aws lambda update-function-code \
              --function-name ${{ env.SEARCH_LAMBDA_FUNCTION_NAME }} \
              --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.SEARCH_IMAGE_TAG }}
 
+      - name: Update upload Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.UPLOAD_IMAGE_TAG }}
+      
+      - name: Update metadata Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
+
+      - name: Update reset Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.RESET_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.RESET_IMAGE_TAG }}
+
+      - name: Update delete Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.DELETE_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }}
+
       - name: Confirm image pushed
         run: |
           aws ecr describe-images \
             --repository-name ${{ env.ECR_REPOSITORY }} \
-            --image-ids imageTag=${{ env.SEARCH_IMAGE_TAG }}
+          aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.RESET_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.DELETE_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.SEARCH_LAMBDA_FUNCTION_NAME }}

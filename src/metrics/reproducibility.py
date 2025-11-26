@@ -10,7 +10,7 @@ import boto3, os, json, re, tempfile, subprocess, sys
 from dotenv import load_dotenv
 
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-sonnet-20240229-v1:0")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "meta.llama3-8b-instruct-v1:0")
 
 brt = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 
@@ -115,27 +115,19 @@ class ReproducibilityMetric(BaseMetric):
         load_dotenv()
 
         prompt = (
-            "The following Python code snippet from a HuggingFace model card failed to run.\n"
-            "Return ONLY the corrected Python code with no explanations and no markdown fences.\n\n"
-            "Code:\n"
-            "```python\n" + str(code_snippet) + "\n```\n\n"
-            "Error (if any):\n" + str(error_message)
+            "The following Python snippet from a HuggingFace model card failed to run. "
+            "Return ONLY the corrected Python code, with no explanations and no markdown fences.\n\n"
+            f"Code:\n```python\n{code_snippet}\n```\n\n"
+            f"Error:\n{error_message}\n"
         )
 
         try:
             # Prepare Anthropic Claude request payload for invoke_model
             body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 2000,
+                "prompt": f"<s>[INST] {prompt} [/INST]",
+                "max_gen_len": 1500,
                 "temperature": 0.0,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt}
-                        ]
-                    }
-                ]
+                "top_p": 0.9,
             }
 
             res = brt.invoke_model(
@@ -150,9 +142,10 @@ class ReproducibilityMetric(BaseMetric):
             payload = json.loads(raw.read().decode("utf-8")) if hasattr(raw, "read") else json.loads(raw)
 
             # Extract text segments from Anthropic response content
-            content = payload.get("content", [])
-            text_parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
-            fixed_code = "\n".join([t for t in text_parts if t]).strip()
+            fixed_code = payload.get("generation")
+            if not fixed_code and payload.get("generations"):
+                fixed_code = payload["generations"][0].get("text")
+            fixed_code = (fixed_code or "").strip()
 
             # If the model still returned fenced code, strip fences
             if fixed_code.startswith("```"):
