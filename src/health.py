@@ -234,6 +234,7 @@ def heartbeat_handler(event, context):
     """
 
     now = _now_iso()
+    
     dynamodb_status = _probe_dynamodb()
     s3_status = _probe_s3()
 
