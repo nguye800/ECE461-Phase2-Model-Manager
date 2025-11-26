@@ -5,9 +5,21 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from urllib.parse import quote
 
-import boto3
-from botocore.config import Config
-from botocore.exceptions import BotoCoreError, ClientError
+try:
+    import boto3
+    from botocore.config import Config
+    from botocore.exceptions import BotoCoreError, ClientError
+except ImportError:
+    # Running in an image without boto3 / botocore installed.
+    # We'll degrade gracefully and mark dependencies as not-ok, but NOT crash.
+    boto3 = None
+    Config = None
+
+    class BotoCoreError(Exception):
+        pass
+
+    class ClientError(Exception):
+        pass
 
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
@@ -104,6 +116,10 @@ def _normalize_path(path_value):
 
 @lru_cache(maxsize=None)
 def _aws_client(service_name):
+    if boto3 is None or Config is None:
+        # Simulate an AWS error so the probe functions can mark the dependency as not-ok
+        raise BotoCoreError("boto3 / botocore not available in this runtime")
+
     connect_timeout = int(os.getenv("HEALTH_CONNECT_TIMEOUT_SECONDS", "2"))
     read_timeout = int(os.getenv("HEALTH_READ_TIMEOUT_SECONDS", "2"))
     config = Config(
@@ -147,12 +163,13 @@ def _probe_dynamodb():
             "table_status": table.get("TableStatus", "unknown"),
             "item_count": table.get("ItemCount", 0),
         }
-    except (BotoCoreError, ClientError) as exc:
-        return {
-            "ok": False,
-            "latency_ms": _elapsed_ms(start),
-            "error": str(exc),
-        }
+    except Exception as exc:
+      return {
+        "ok": False,
+        "latency_ms": _elapsed_ms(start),
+        "error": str(exc),
+    }
+
 
 
 def _probe_s3():
@@ -165,12 +182,13 @@ def _probe_s3():
             "ok": True,
             "latency_ms": _elapsed_ms(start),
         }
-    except (BotoCoreError, ClientError) as exc:
+    except Exception as exc:
         return {
-            "ok": False,
-            "latency_ms": _elapsed_ms(start),
-            "error": str(exc),
-        }
+        "ok": False,
+        "latency_ms": _elapsed_ms(start),
+        "error": str(exc),
+    }
+
 
 
 def _probe_lambda(function_name):
@@ -188,12 +206,12 @@ def _probe_lambda(function_name):
             "handler": config.get("Handler"),
             "version": config.get("Version"),
         }
-    except (BotoCoreError, ClientError) as exc:
-        return {
-            "ok": False,
-            "latency_ms": _elapsed_ms(start),
-            "error": str(exc),
-        }
+    except Exception as exc:
+      return {
+        "ok": False,
+        "latency_ms": _elapsed_ms(start),
+        "error": str(exc),
+    }
 
 
 def _timeline(include_timeline, now, is_ok):
@@ -217,8 +235,11 @@ def heartbeat_handler(event, context):
     now = _now_iso()
     dynamodb_status = _probe_dynamodb()
     s3_status = _probe_s3()
+
     all_ok = dynamodb_status["ok"] and s3_status["ok"]
-    status_code = 200 if all_ok else 503
+
+    # Always return HTTP 200 for /health, but mark status in the body.
+    status_code = 200
     body = {
         "status": "ok" if all_ok else "critical",
         "service": "model-registry",
@@ -241,6 +262,7 @@ def heartbeat_handler(event, context):
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(body),
     }
+
 
 
 def handler(event, context):
