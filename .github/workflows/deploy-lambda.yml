@@ -1,4 +1,4 @@
-name: Deploy Search Lambda (Container Image)
+name: Deploy Lambdas to AWS (Container Image)
 
 on:
   push:
