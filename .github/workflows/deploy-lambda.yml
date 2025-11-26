@@ -61,7 +61,7 @@ jobs:
 
       # Optional — uncomment **after** Search Lambda exists
       - name: Update Search Lambda function to new image
-      run: |
+        run: |
           aws lambda update-function-code \
              --function-name ${{ env.SEARCH_LAMBDA_FUNCTION_NAME }} \
              --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.SEARCH_IMAGE_TAG }}
