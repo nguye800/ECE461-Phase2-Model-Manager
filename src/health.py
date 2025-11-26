@@ -6,6 +6,7 @@ from functools import lru_cache
 from urllib.parse import quote
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 
@@ -103,7 +104,15 @@ def _normalize_path(path_value):
 
 @lru_cache(maxsize=None)
 def _aws_client(service_name):
-    return boto3.client(service_name, region_name=AWS_REGION)
+    connect_timeout = int(os.getenv("HEALTH_CONNECT_TIMEOUT_SECONDS", "2"))
+    read_timeout = int(os.getenv("HEALTH_READ_TIMEOUT_SECONDS", "2"))
+    config = Config(
+        region_name=AWS_REGION,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        retries={"max_attempts": 1, "mode": "standard"},
+    )
+    return boto3.client(service_name, region_name=AWS_REGION, config=config)
 
 
 def _build_issue(summary, severity="error", details=None):
