@@ -403,12 +403,14 @@ class ArtifactRepository:
         try:
             response = self.table.query(
                 IndexName="GSI_ALPHABET_LISTING",
-                KeyConditionExpression=Key("name_lc").eq(name.lower()),
-                FilterExpression=Attr("type").eq("MODEL") & Attr("sk").eq("META"),
+                KeyConditionExpression=Key("type").eq("MODEL") 
+                                    & Key("name_lc").eq(name.lower()),
             )
-        except Exception as exc:  # pragma: no cover - boto3 specific failure path
+        except Exception as exc:
             raise RepositoryError(str(exc)) from exc
+
         return response.get("Items", [])
+
     
 
     def regex_search(
