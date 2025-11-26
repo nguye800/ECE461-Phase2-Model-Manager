@@ -1,0 +1,17 @@
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+*.pyc
+*.pyo
+.git/
+.idea/
+tests/
+run
+test_runner.py
+*.iml
+*.lock
+*.log
+*.tgz
+*.egg-info/

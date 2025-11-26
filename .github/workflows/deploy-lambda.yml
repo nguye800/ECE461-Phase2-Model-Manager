@@ -1,13 +1,12 @@
-name: Deploy AWS Lambda (Container Image)
+name: Deploy Search Lambda (Container Image)
 
 on:
   push:
     branches:
       - main  # Deploy when code is merged to main
-      - health-branch
 
 permissions:
-  id-token: write      # needed for OIDC
+  id-token: write
   contents: read
 
 env:
@@ -15,6 +14,10 @@ env:
   AWS_ACCOUNT_ID: 965919626283
   ECR_REPOSITORY: ece461/function-containers
 
+  SEARCH_LAMBDA_FUNCTION_NAME: search
+  SEARCH_DOCKERFILE: Dockerfile
+  SEARCH_IMAGE_TAG: search-latest
+  
   RATE_LAMBDA_FUNCTION_NAME: Rate
   RATE_DOCKERFILE: dockerfiles/dockerfile.rate
   RATE_IMAGE_TAG: rate
@@ -64,9 +67,6 @@ jobs:
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | \
             jq -R 'split(".") | .[1] | @base64d | fromjson'
 
-      # (Optional) build/test steps could go here
-      # e.g., lint Dockerfile, run unit tests, etc.
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -77,10 +77,19 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push rate Docker image to ECR
+      - name: Build, tag, and push Search Docker image to ECR
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
+          echo "Building Search Lambda image..."
+          docker build -f ${{ env.SEARCH_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.SEARCH_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.SEARCH_IMAGE_TAG }}
+          
+      - name: Build, tag, and push Rate Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |   
           docker build -f ${{ env.RATE_DOCKERFILE }} \
             -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }} .
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
@@ -139,12 +148,18 @@ jobs:
           aws lambda update-function-code \
             --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }} \
             --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.RATE_IMAGE_TAG }}
-
-      - name: Update enqueue_rate Lambda function to new image
+       
+      - name: Update enqueue-rate Lambda function to new image
         run: |
           aws lambda update-function-code \
             --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }} \
             --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.ENQUEUE_IMAGE_TAG }}
+            
+      - name: Update Search Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+             --function-name ${{ env.SEARCH_LAMBDA_FUNCTION_NAME }} \
+             --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.SEARCH_IMAGE_TAG }}
 
       - name: Update upload Lambda function to new image
         run: |
@@ -178,7 +193,10 @@ jobs:
 
       # Optional: uncomment once the Lambda is live
       - name: Confirm deployment
+      - name: Confirm image pushed
         run: |
+          aws ecr describe-images \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
           aws lambda get-function --function-name ${{ env.RATE_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }}
@@ -186,3 +204,4 @@ jobs:
           aws lambda get-function --function-name ${{ env.RESET_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.DELETE_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.HEALTH_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.SEARCH_LAMBDA_FUNCTION_NAME }}
