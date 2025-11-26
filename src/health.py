@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from urllib.parse import quote
 
+# --- Safe boto3 import -------------------------------------------------------
+
 try:
     import boto3
     from botocore.config import Config
@@ -152,9 +154,9 @@ def _cloudwatch_log_url(log_group):
 
 
 def _probe_dynamodb():
-    client = _aws_client("dynamodb")
     start = time.perf_counter()
     try:
+        client = _aws_client("dynamodb")
         response = client.describe_table(TableName=DYNAMODB_TABLE_NAME)
         table = response.get("Table", {})
         return {
@@ -164,37 +166,34 @@ def _probe_dynamodb():
             "item_count": table.get("ItemCount", 0),
         }
     except Exception as exc:
-      return {
-        "ok": False,
-        "latency_ms": _elapsed_ms(start),
-        "error": str(exc),
-    }
-
+        return {
+            "ok": False,
+            "latency_ms": _elapsed_ms(start),
+            "error": str(exc),
+        }
 
 
 def _probe_s3():
-    client = _aws_client("s3")
     start = time.perf_counter()
     try:
+        client = _aws_client("s3")
         client.head_bucket(Bucket=S3_BUCKET_NAME)
-        # head_bucket succeeded, optionally fetch object count hint
         return {
             "ok": True,
             "latency_ms": _elapsed_ms(start),
         }
     except Exception as exc:
         return {
-        "ok": False,
-        "latency_ms": _elapsed_ms(start),
-        "error": str(exc),
-    }
-
+            "ok": False,
+            "latency_ms": _elapsed_ms(start),
+            "error": str(exc),
+        }
 
 
 def _probe_lambda(function_name):
-    client = _aws_client("lambda")
     start = time.perf_counter()
     try:
+        client = _aws_client("lambda")
         response = client.get_function(FunctionName=function_name)
         config = response.get("Configuration", {})
         return {
@@ -207,11 +206,11 @@ def _probe_lambda(function_name):
             "version": config.get("Version"),
         }
     except Exception as exc:
-      return {
-        "ok": False,
-        "latency_ms": _elapsed_ms(start),
-        "error": str(exc),
-    }
+        return {
+            "ok": False,
+            "latency_ms": _elapsed_ms(start),
+            "error": str(exc),
+        }
 
 
 def _timeline(include_timeline, now, is_ok):
@@ -226,7 +225,6 @@ def _timeline(include_timeline, now, is_ok):
     ]
 
 
-
 def heartbeat_handler(event, context):
     """
     Handler for GET /health.
@@ -234,7 +232,7 @@ def heartbeat_handler(event, context):
     """
 
     now = _now_iso()
-    
+
     dynamodb_status = _probe_dynamodb()
     s3_status = _probe_s3()
 
@@ -266,32 +264,43 @@ def heartbeat_handler(event, context):
     }
 
 
-
 def handler(event, context):
     """
     Unified Lambda entrypoint that dispatches /health and /health/components.
     """
+    try:
+        method = _extract_http_method(event)
+        path = _normalize_path(_extract_http_path(event))
+        path_lower = path.lower()
 
-    method = _extract_http_method(event)
-    path = _normalize_path(_extract_http_path(event))
-    path_lower = path.lower()
+        if method == "GET" and path_lower.endswith("/health/components"):
+            return components_handler(event, context)
 
-    if method == "GET" and path_lower.endswith("/health/components"):
-        return components_handler(event, context)
+        if method == "GET" and path_lower.endswith("/health"):
+            return heartbeat_handler(event, context)
 
-    if method == "GET" and path_lower.endswith("/health"):
-        return heartbeat_handler(event, context)
-
-    return {
-        "statusCode": 404,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(
-            {
-                "message": "Not Found",
-                "requested_path": path or "unknown",
-            }
-        ),
-    }
+        return {
+            "statusCode": 404,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(
+                {
+                    "message": "Not Found",
+                    "requested_path": path or "unknown",
+                }
+            ),
+        }
+    except Exception as exc:
+        # Last-resort guard: never let /health crash with a 500.
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(
+                {
+                    "status": "critical",
+                    "error": str(exc),
+                }
+            ),
+        }
 
 
 def _dynamodb_component(now, window_minutes, include_timeline):
