@@ -224,28 +224,48 @@ def _normalize_artifact_type(value: Optional[str]) -> str:
 
 
 def _load_json_body(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Safely load JSON from the API Gateway / Lambda proxy event.
+
+    Accepts:
+      - body as a JSON string
+      - body as a dict (already parsed)
+      - base64-encoded body (isBase64Encoded == True)
+    """
+
     if "body" not in event or event["body"] is None:
         raise UploadError("Request body is required.")
 
     body = event["body"]
-    if isinstance(body, (bytes, bytearray)):
-        raw_body = bytes(body)
-    elif isinstance(body, str):
-        raw_body = body.encode("utf-8")
+
+    # Case 1: already a dict
+    if isinstance(body, dict):
+        payload = body
     else:
-        raw_body = json.dumps(body).encode("utf-8")
+        # Case 2: string or bytes -> get bytes
+        if isinstance(body, (bytes, bytearray)):
+            raw_body = bytes(body)
+        elif isinstance(body, str):
+            raw_body = body.encode("utf-8")
+        else:
+            # Fallback – try to JSON-encode whatever it is
+            raw_body = json.dumps(body).encode("utf-8")
 
-    if event.get("isBase64Encoded"):
-        raw_body = base64.b64decode(raw_body)
+        # Decode base64 if API Gateway told us it is encoded
+        if event.get("isBase64Encoded"):
+            raw_body = base64.b64decode(raw_body)
 
-    try:
-        payload = json.loads(raw_body)
-    except json.JSONDecodeError as exc:
-        raise UploadError("Request body must be valid JSON.") from exc
+        try:
+            payload = json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            # This is exactly the error you’re seeing
+            raise UploadError("Request body must be valid JSON.") from exc
 
     if not isinstance(payload, dict):
         raise UploadError("Request body must be a JSON object.")
+
     return payload
+
 
 
 def _generate_artifact_id() -> str:
