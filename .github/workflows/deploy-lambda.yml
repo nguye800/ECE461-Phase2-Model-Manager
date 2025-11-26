@@ -39,6 +39,10 @@ env:
   DELETE_IMAGE_TAG: delete-latest
   DELETE_LAMBDA_FUNCTION_NAME: model-registry-delete-artifact
 
+  HEALTH_DOCKERFILE: dockerfiles/dockerfile.health
+  HEALTH_IMAGE_TAG: health-latest
+  HEALTH_LAMBDA_FUNCTION_NAME: Health
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -121,6 +125,14 @@ jobs:
             -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }} .
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }}
 
+      - name: Build, tag, and push health Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.HEALTH_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.HEALTH_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.HEALTH_IMAGE_TAG }}
+
       # Uncomment after the Lambda exists and you want automatic deploys
       - name: Update rate Lambda function to new image
         run: |
@@ -158,6 +170,12 @@ jobs:
             --function-name ${{ env.DELETE_LAMBDA_FUNCTION_NAME }} \
             --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }}
 
+      - name: Update health Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.HEALTH_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.HEALTH_IMAGE_TAG }}
+
       # Optional: uncomment once the Lambda is live
       - name: Confirm deployment
         run: |
@@ -167,3 +185,4 @@ jobs:
           aws lambda get-function --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.RESET_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.DELETE_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.HEALTH_LAMBDA_FUNCTION_NAME }}
