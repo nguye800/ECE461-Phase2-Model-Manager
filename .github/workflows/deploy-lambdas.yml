@@ -6,6 +6,7 @@ on:
       - main
       - upload_dev
       - download_dev
+      - delete-reset-lambdas
 
 permissions:
   id-token: write
