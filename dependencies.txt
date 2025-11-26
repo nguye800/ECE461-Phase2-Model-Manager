@@ -20,3 +20,13 @@ botocore
 moto
 hf_xet
 typing_extensions
+
+# Frontend (npm) dependencies for the TSX components under /frontend.
+# Install these via npm/yarn (not pip) from the frontend directory:
+# next@latest
+# react@latest
+# react-dom@latest
+# framer-motion@latest
+# lucide-react@latest
+# @types/react@latest
+# @types/react-dom@latest
