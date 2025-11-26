@@ -1,0 +1,23 @@
+FROM public.ecr.aws/lambda/python:3.11
+
+RUN yum install -y \
+        git \
+        gcc \
+        gcc-c++ \
+        make \
+        python3-devel \
+    && yum clean all
+
+COPY lambda-requirements.txt ${LAMBDA_TASK_ROOT}/lambda-requirements.txt
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/lambda-requirements.txt
+
+COPY src ${LAMBDA_TASK_ROOT}/src
+
+ENV PYTHONPATH=${LAMBDA_TASK_ROOT}/src \
+    LOCAL_STORAGE_DIR=/tmp/model-manager \
+    HF_HOME=/tmp/hf-cache \
+    TRANSFORMERS_CACHE=/tmp/hf-cache
+
+# Default Lambda entry point (can be overridden per-function)
+CMD ["delete_artifact_lambda.handler"]

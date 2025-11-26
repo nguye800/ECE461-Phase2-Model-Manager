@@ -31,6 +31,14 @@ env:
   METADATA_IMAGE_TAG: metadata-latest
   METADATA_LAMBDA_FUNCTION_NAME: Metadata
 
+  RESET_DOCKERFILE: dockerfiles/dockerfile.reset
+  RESET_IMAGE_TAG: reset-latest
+  RESET_LAMBDA_FUNCTION_NAME: model-registry-reset-registry
+
+  DELETE_DOCKERFILE: dockerfiles/dockerfile.delete
+  DELETE_IMAGE_TAG: delete-latest
+  DELETE_LAMBDA_FUNCTION_NAME: model-registry-delete-artifact
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -97,6 +105,22 @@ jobs:
             -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }} .
           docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
 
+      - name: Build, tag, and push reset Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.RESET_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RESET_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.RESET_IMAGE_TAG }}
+
+      - name: Build, tag, and push delete Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -f ${{ env.DELETE_DOCKERFILE }} \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }} .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }}
+
       # Uncomment after the Lambda exists and you want automatic deploys
       - name: Update rate Lambda function to new image
         run: |
@@ -122,6 +146,18 @@ jobs:
             --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }} \
             --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.METADATA_IMAGE_TAG }}
 
+      - name: Update reset Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.RESET_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.RESET_IMAGE_TAG }}
+
+      - name: Update delete Lambda function to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.DELETE_LAMBDA_FUNCTION_NAME }} \
+            --image-uri ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.DELETE_IMAGE_TAG }}
+
       # Optional: uncomment once the Lambda is live
       - name: Confirm deployment
         run: |
@@ -129,3 +165,5 @@ jobs:
           aws lambda get-function --function-name ${{ env.ENQUEUE_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.UPLOAD_LAMBDA_FUNCTION_NAME }}
           aws lambda get-function --function-name ${{ env.METADATA_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.RESET_LAMBDA_FUNCTION_NAME }}
+          aws lambda get-function --function-name ${{ env.DELETE_LAMBDA_FUNCTION_NAME }}
