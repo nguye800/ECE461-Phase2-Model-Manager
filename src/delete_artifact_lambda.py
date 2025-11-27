@@ -39,8 +39,15 @@ def handler(event, context):
       sk = any (we delete all rows with that pk)
     """
     # --- Auth ---
+    method = event.get("httpMethod")
+    path = event.get("path") or event.get("rawPath")
+    print(
+        f"[delete.lambda] Received {method or 'UNKNOWN'} {path or '/'} body={event.get('body')}",
+        flush=True,
+    )
     token = _get_header(event.get("headers", {}) or {}, "X-Authorization")
     if not token or (AUTH_TOKEN is not None and token != AUTH_TOKEN):
+        print("[delete.lambda] Authentication failed", flush=True)
         return _build_response(
             403,
             {"error": "Authentication failed due to invalid or missing AuthenticationToken."},
@@ -77,6 +84,7 @@ def handler(event, context):
 
         if not items:
             # Nothing with that pk → 404
+            print(f"[delete.lambda] Artifact not found for pk={pk_value}", flush=True)
             return _build_response(
                 404,
                 {"error": "Artifact does not exist.", "artifact_type": artifact_type, "id": artifact_id},
@@ -91,6 +99,7 @@ def handler(event, context):
                 )
                 deleted += 1
 
+        print(f"[delete.lambda] Deleting pk={pk_value} items={len(items)}", flush=True)
         return _build_response(
             200,
             {
@@ -102,6 +111,7 @@ def handler(event, context):
         )
 
     except ClientError as e:
+        print(f"[delete.lambda] DynamoDB error: {e}", flush=True)
         return _build_response(
             500,
             {"error": "Internal server error while deleting artifact.",

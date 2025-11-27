@@ -383,6 +383,10 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
         .get("method", event.get("httpMethod"))
     )
     path = event.get("rawPath") or event.get("path", "")
+    print(
+        f"[metadata.lambda] Received {method or 'UNKNOWN'} {path or '/'} body={event.get('body')}",
+        flush=True,
+    )
     segments = _parse_path(path)
     query = event.get("queryStringParameters") or {}
 
@@ -395,6 +399,10 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
             payload = _build_artifact_envelope(artifact_type, item)
         except ValueError as exc:
             return _response(400, {"message": str(exc)})
+        print(
+            f"[metadata.lambda] Returning artifact envelope for {artifact_type}/{artifact_id}",
+            flush=True,
+        )
         return _response(200, payload)
 
     if len(segments) >= 4 and segments[0] == "artifact":
@@ -414,6 +422,10 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
                 return _response(404, {"message": str(exc)})
             except ObjectSizeResolutionError as exc:
                 return _response(500, {"message": str(exc)})
+            print(
+                f"[metadata.lambda] Returning cost info for {artifact_type}/{artifact_id} dependency={dependency_flag}",
+                flush=True,
+            )
             return _response(200, payload)
 
         if not metadata_item:
@@ -421,6 +433,10 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
 
         if method == "GET" and action == "lineage":
             graph = _build_lineage_graph(artifact_id, artifact_type, metadata_item)
+            print(
+                f"[metadata.lambda] Returning lineage for {artifact_type}/{artifact_id}",
+                flush=True,
+            )
             return _response(200, graph)
 
         if method == "GET" and action == "audit":
@@ -428,6 +444,10 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
             if not audits:
                 audits = _get_audits(artifact_type, artifact_id)
             formatted = _format_audit_entries(audits, artifact_type, artifact_id)
+            print(
+                f"[metadata.lambda] Returning {len(formatted)} audit entries for {artifact_type}/{artifact_id}",
+                flush=True,
+            )
             return _response(200, formatted)
 
         if method == "POST" and action == "license-check" and artifact_type == "model":
@@ -454,6 +474,10 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
             metadata_license = (metadata_item.get("license") or "").lower()
             if metadata_license and metadata_license != github_license:
                 compatible = False
+            print(
+                f"[metadata.lambda] license-check result compatible={compatible}",
+                flush=True,
+            )
             return _response(200, compatible)
 
     return _response(

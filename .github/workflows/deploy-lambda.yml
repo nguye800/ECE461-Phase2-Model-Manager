@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main  # Deploy when code is merged to main
+      - lucas-autograder
 
 permissions:
   id-token: write

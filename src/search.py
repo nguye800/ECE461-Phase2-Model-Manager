@@ -55,7 +55,12 @@ def lambda_handler(event: dict, context: Any) -> dict:
     AWS Lambda entry point. Delegates to `handle_search` for backwards
     compatibility with other modules in this repo.
     """
-
+    method = (event.get("requestContext", {}).get("http", {}) or {}).get("method") or event.get("httpMethod")
+    path = event.get("rawPath") or event.get("path")
+    print(
+        f"[search.lambda] Received {method or 'UNKNOWN'} {path or '/'} body={event.get('body')}",
+        flush=True,
+    )
     return handle_search(event, context)
 
 
@@ -66,14 +71,19 @@ def handle_search(event: dict, _context: Any) -> dict:
 
     method = _extract_method(event)
     path = _normalize_path(event)
+    print(f"[search.handle] Routing {method} {path}", flush=True)
 
     if method == "POST" and path == "/artifacts":
+        print("[search.handle] dispatching to _handle_post_artifacts", flush=True)
         return _handle_post_artifacts(event)
     if method == "GET" and path.startswith("/artifact/byName"):
+        print("[search.handle] dispatching to _handle_get_artifact_by_name", flush=True)
         return _handle_get_artifact_by_name(event, path)
     if method == "POST" and path == "/artifact/byRegEx":
+        print("[search.handle] dispatching to _handle_post_regex", flush=True)
         return _handle_post_regex(event)
 
+    print("[search.handle] unsupported route", flush=True)
     return _error_response(
         404,
         f"Unsupported route: {method} {path}",
@@ -85,6 +95,7 @@ def _handle_post_artifacts(event: dict) -> dict:
         queries_input = _parse_json_body(event, expected_type=list)
     except ValueError as exc:
         return _error_response(400, str(exc))
+    print(f"[search.post_artifacts] payload={queries_input}", flush=True)
 
     queries = queries_input or [{"name": "*"}]
     if not queries:
@@ -125,6 +136,10 @@ def _handle_post_artifacts(event: dict) -> dict:
 
     headers = _build_offset_header(next_key)
 
+    print(
+        f"[search.post_artifacts] returning {len(plain_artifacts)} artifacts next_key={bool(next_key)}",
+        flush=True,
+    )
     return _success_response(plain_artifacts, headers=headers)
 
 
@@ -132,6 +147,7 @@ def _handle_get_artifact_by_name(event: dict, path: str) -> dict:
     name = _extract_name_parameter(event, path)
     if not name:
         return _error_response(400, "Missing artifact name in path")
+    print(f"[search.byName] looking up name={name}", flush=True)
 
     repo = _get_repository()
     try:
@@ -143,6 +159,7 @@ def _handle_get_artifact_by_name(event: dict, path: str) -> dict:
     if not records:
         return _error_response(404, f"No artifact found with name '{name}'")
 
+    print(f"[search.byName] found {len(records)} records", flush=True)
     return _success_response([_artifact_metadata(r) for r in records])
 
 
@@ -181,10 +198,15 @@ def _handle_post_regex(event: dict) -> dict:
     artifacts = artifacts[pagination.skip : pagination.skip + limit]
     plain_artifacts = [_artifact_metadata(a) for a in artifacts]
     if not plain_artifacts:
+        print("[search.regex] no artifacts matched regex", flush=True)
         return _error_response(404, "No artifact found under this regex.")
 
     headers = _build_offset_header(next_key)
 
+    print(
+        f"[search.regex] returning {len(plain_artifacts)} artifacts next={bool(next_key)}",
+        flush=True,
+    )
     return _success_response(plain_artifacts, headers=headers)
 
 

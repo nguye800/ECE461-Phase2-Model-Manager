@@ -77,8 +77,15 @@ def handler(event, context):
         401: Not used here; we’ll fold into 403.
         403: Authentication failed.
     """
+    method = event.get("httpMethod")
+    path = event.get("path") or event.get("rawPath")
+    print(
+        f"[reset.lambda] Received {method or 'UNKNOWN'} {path or '/'} body={event.get('body')}",
+        flush=True,
+    )
     token = _get_header(event.get("headers", {}) or {}, "X-Authorization")
     if not token or (AUTH_TOKEN is not None and token != AUTH_TOKEN):
+        print("[reset.lambda] Authentication failed", flush=True)
         return _build_response(
             403,
             {"error": "Authentication failed due to invalid or missing AuthenticationToken."},
@@ -86,17 +93,20 @@ def handler(event, context):
 
     try:
         deleted_count = _clear_table(TABLE_NAME)
+        print(f"[reset.lambda] Cleared table entries={deleted_count}", flush=True)
 
         # OPTIONAL: re-seed default artifacts here if your project spec requires it
         # e.g. read a JSON from S3 specified by SEED_S3_URI and write items into the table.
 
     except ClientError as e:
+        print(f"[reset.lambda] DynamoDB error resetting registry: {e}", flush=True)
         return _build_response(
             500,
             {"error": "Internal server error while resetting registry.",
              "details": str(e)},
         )
 
+    print("[reset.lambda] Reset completed successfully", flush=True)
     return _build_response(
         200,
         {
