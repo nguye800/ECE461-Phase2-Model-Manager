@@ -265,6 +265,8 @@ def heartbeat_handler(event, context):
 
 
 def handler(event, context):
+    print("HEALTH HANDLER VERSION 3, event:", json.dumps(event)[:500])
+    
     """
     Unified Lambda entrypoint that dispatches /health and /health/components.
     """
