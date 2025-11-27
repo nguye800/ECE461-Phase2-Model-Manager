@@ -1241,10 +1241,11 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             code_name or code_url,
             request.model_id,
         )
-    elif findings.get("code_name") or findings.get("code_url"):
-        # Same deferred flow for code when nothing exists yet.
+    else:
+        # Same deferred flow for code when nothing exists yet; seed with the
+        # model name so we can match later if the repo uses a shorter alias.
         pending["code"] = {
-            "name": findings.get("code_name"),
+            "name": findings.get("code_name") or request.metadata.get("name") or request.model_id,
             "url": findings.get("code_url"),
         }
 
