@@ -35,7 +35,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 
 import boto3
-import requests
 from boto3.dynamodb.types import TypeSerializer
 from boto3.session import Session
 from boto3.dynamodb.conditions import Attr, Key
@@ -543,6 +542,7 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
     )
 
     _put_item(table, item)
+    _process_dependency_resolution(artifact_type, item)
     scoring_urls = _collect_scoring_urls(item)
     if scoring_urls:
         _enqueue_scoring_job(artifact_id, scoring_urls)
@@ -997,6 +997,18 @@ def _build_ddb_item(
     if codebase_info:
         item["codebase"] = codebase_info
 
+    pending_meta = metadata.get("pending_dependencies")
+    if pending_meta:
+        cleaned_pending = {
+            key: value
+            for key, value in pending_meta.items()
+            if value and (value.get("name") or value.get("url"))
+        }
+        if cleaned_pending:
+            item["pending_dependencies"] = cleaned_pending
+    elif existing and existing.get("pending_dependencies"):
+        item["pending_dependencies"] = existing["pending_dependencies"]
+
     assets = metadata.get("assets") or item.get("assets") or {}
     artifacts = list(uploaded_artifacts)
     if artifacts:
@@ -1149,6 +1161,7 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
         return
 
     findings = _analyze_readme_entities(readme_text)
+    pending = request.metadata.setdefault("pending_dependencies", {})
     dataset_entry = _lookup_artifact_entry(
         "dataset",
         names=[findings.get("dataset_name")],
@@ -1168,6 +1181,11 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             dataset_name or dataset_url,
             request.model_id,
         )
+    elif findings.get("dataset_name") or findings.get("dataset_url"):
+        pending["dataset"] = {
+            "name": findings.get("dataset_name"),
+            "url": findings.get("dataset_url"),
+        }
 
     code_names = [
         findings.get("code_name"),
@@ -1192,6 +1210,11 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             code_name or code_url,
             request.model_id,
         )
+    elif findings.get("code_name") or findings.get("code_url"):
+        pending["code"] = {
+            "name": findings.get("code_name"),
+            "url": findings.get("code_url"),
+        }
 
 
 def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
@@ -1228,14 +1251,12 @@ def _candidate_model_readme_urls(owner: str, repo: str) -> List[str]:
 
 
 def _safe_http_get(url: str) -> Optional[str]:
+    if not url:
+        return None
+    request = urllib.request.Request(url, headers={"User-Agent": "model-manager/1.0"})
     try:
-        resp = requests.get(
-            url,
-            timeout=15,
-            headers={"User-Agent": "model-manager/1.0"},
-        )
-        resp.raise_for_status()
-        return resp.text
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.read().decode("utf-8", errors="ignore")
     except Exception:
         return None
 
@@ -1363,6 +1384,130 @@ def _query_artifact_by_name(table, artifact_type: str, name: str) -> Optional[Di
         return None
     items = response.get("Items") or []
     return items[0] if items else None
+
+
+def _process_dependency_resolution(artifact_type: str, artifact_record: Dict[str, Any]) -> None:
+    if artifact_type not in {"dataset", "code"}:
+        return
+    dependency_key = "dataset" if artifact_type == "dataset" else "code"
+    dependency_url = artifact_record.get("model_url")
+    dependency_name = (
+        artifact_record.get("name")
+        or artifact_record.get("metadata", {}).get("name")
+        or artifact_record.get("model_id")
+    )
+    table = _get_artifacts_table()
+    pending_models = _find_models_waiting_on_dependency(
+        table, dependency_key, dependency_name, dependency_url
+    )
+    for model_item in pending_models:
+        updated = _apply_dependency_to_model(
+            model_item, dependency_key, artifact_record, dependency_name, dependency_url
+        )
+        if not updated:
+            continue
+        try:
+            _put_item(table, updated)
+            LOGGER.info(
+                "Resolved pending %s dependency for model %s",
+                dependency_key,
+                updated.get("model_id"),
+            )
+        except ClientError as exc:
+            LOGGER.warning(
+                "Failed to update model %s while resolving %s dependency: %s",
+                updated.get("model_id"),
+                dependency_key,
+                exc,
+            )
+            continue
+        scoring_urls = _collect_scoring_urls(updated)
+        if scoring_urls:
+            _enqueue_scoring_job(updated["model_id"], scoring_urls)
+
+
+def _find_models_waiting_on_dependency(
+    table,
+    dependency_key: str,
+    dependency_name: Optional[str],
+    dependency_url: Optional[str],
+) -> List[Dict[str, Any]]:
+    filter_expression = Attr("type").eq("MODEL") & Attr("pending_dependencies").exists()
+    items: List[Dict[str, Any]] = []
+    scan_kwargs: Dict[str, Any] = {"FilterExpression": filter_expression}
+    while True:
+        response = table.scan(**scan_kwargs)
+        for item in response.get("Items", []):
+            pending = (item.get("pending_dependencies") or {}).get(dependency_key)
+            if not pending:
+                continue
+            if _dependency_matches(pending, dependency_name, dependency_url):
+                items.append(item)
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        scan_kwargs["ExclusiveStartKey"] = last_key
+    return items
+
+
+def _dependency_matches(
+    pending_entry: Dict[str, Any],
+    dependency_name: Optional[str],
+    dependency_url: Optional[str],
+) -> bool:
+    pending_url = pending_entry.get("url")
+    pending_name = pending_entry.get("name")
+    if pending_url and dependency_url and _normalize_str(pending_url) == _normalize_str(dependency_url):
+        return True
+    if pending_name and dependency_name and _normalize_str(pending_name) == _normalize_str(dependency_name):
+        return True
+    return False
+
+
+def _normalize_str(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.strip().lower()
+
+
+def _apply_dependency_to_model(
+    model_item: Dict[str, Any],
+    dependency_key: str,
+    dependency_record: Dict[str, Any],
+    dependency_name: Optional[str],
+    dependency_url: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    pending = model_item.get("pending_dependencies") or {}
+    pending_entry = pending.get(dependency_key)
+    if not pending_entry:
+        return None
+    if not _dependency_matches(pending_entry, dependency_name, dependency_url):
+        return None
+
+    if dependency_key == "dataset":
+        target_block = model_item.get("dataset") or {}
+    else:
+        target_block = model_item.get("codebase") or {}
+
+    if dependency_name:
+        target_block.setdefault("name", dependency_name)
+    if dependency_url:
+        target_block["url"] = dependency_url
+    target_block["artifact_id"] = dependency_record.get("model_id")
+    target_block["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    if dependency_key == "dataset":
+        model_item["dataset"] = target_block
+    else:
+        model_item["codebase"] = target_block
+
+    pending.pop(dependency_key, None)
+    if pending:
+        model_item["pending_dependencies"] = pending
+    else:
+        model_item.pop("pending_dependencies", None)
+    model_item["updated_at"] = datetime.now(timezone.utc).isoformat()
+    return model_item
 
 
 def _extract_zip_metadata(artifact: ArtifactDescriptor, data: bytes) -> Dict[str, Any]:
@@ -1527,6 +1672,7 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             return _format_response(
                 502, {"status": "error", "message": "Failed to store artifact metadata"}
             )
+        _process_dependency_resolution(artifact_type, item)
 
         action = "updated" if existing else "created"
 
