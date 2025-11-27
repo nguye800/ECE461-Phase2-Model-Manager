@@ -1212,6 +1212,7 @@ def _apply_extracted_metadata(request: UploadRequest, extracted: Dict[str, Any])
 
 def _format_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
     """Create a standard Lambda proxy response."""
+    print(f"[upload.lambda] Responding with status {status_code}", flush=True)
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},

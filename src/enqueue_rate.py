@@ -153,6 +153,7 @@ def _extract_model_id(event: Dict[str, Any]) -> str:
 
 
 def _json_response(status_code: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+    print(f"[rate.http] Responding with status {status_code}", flush=True)
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},

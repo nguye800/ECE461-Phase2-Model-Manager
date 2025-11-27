@@ -16,6 +16,7 @@ ARTIFACT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9\-]+$")
 
 
 def _build_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
+    print(f"[delete.lambda] Responding with status {status_code}", flush=True)
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},

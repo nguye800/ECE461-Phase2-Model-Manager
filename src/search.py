@@ -87,14 +87,16 @@ def handle_search(event: dict, _context: Any) -> dict:
     return _error_response(
         404,
         f"Unsupported route: {method} {path}",
+        log_prefix="[search.handle]",
     )
 
 
 def _handle_post_artifacts(event: dict) -> dict:
+    log_prefix = "[search.post_artifacts]"
     try:
         queries_input = _parse_json_body(event, expected_type=list)
     except ValueError as exc:
-        return _error_response(400, str(exc))
+        return _error_response(400, str(exc), log_prefix=log_prefix)
     print(f"[search.post_artifacts] payload={queries_input}", flush=True)
 
     queries = queries_input or [{"name": "*"}]
@@ -104,13 +106,15 @@ def _handle_post_artifacts(event: dict) -> dict:
     normalized_queries: list[dict] = []
     for query in queries:
         if not isinstance(query, dict):
-            return _error_response(400, "Each artifact_query must be a JSON object")
+            return _error_response(
+                400, "Each artifact_query must be a JSON object", log_prefix=log_prefix
+            )
         normalized_query = dict(query)
         normalized_query["name"] = str(query.get("name") or "*").strip() or "*"
         try:
             normalized_types = _normalize_type_filters(query.get("types"))
         except ValueError as exc:
-            return _error_response(400, str(exc))
+            return _error_response(400, str(exc), log_prefix=log_prefix)
         if normalized_types is not None:
             normalized_query["types"] = normalized_types
         else:
@@ -129,7 +133,7 @@ def _handle_post_artifacts(event: dict) -> dict:
         artifacts, next_key = repo.search(normalized_queries, target, pagination.start_key)
     except RepositoryError as exc:
         LOGGER.error("Failed to execute artifact search: %s", exc)
-        return _error_response(500, "Unable to execute search")
+        return _error_response(500, "Unable to execute search", log_prefix=log_prefix)
 
     artifacts = artifacts[pagination.skip : pagination.skip + limit]
     plain_artifacts = [_artifact_metadata(a) for a in artifacts]
@@ -140,13 +144,14 @@ def _handle_post_artifacts(event: dict) -> dict:
         f"[search.post_artifacts] returning {len(plain_artifacts)} artifacts next_key={bool(next_key)}",
         flush=True,
     )
-    return _success_response(plain_artifacts, headers=headers)
+    return _success_response(plain_artifacts, headers=headers, log_prefix=log_prefix)
 
 
 def _handle_get_artifact_by_name(event: dict, path: str) -> dict:
+    log_prefix = "[search.byName]"
     name = _extract_name_parameter(event, path)
     if not name:
-        return _error_response(400, "Missing artifact name in path")
+        return _error_response(400, "Missing artifact name in path", log_prefix=log_prefix)
     print(f"[search.byName] looking up name={name}", flush=True)
 
     repo = _get_repository()
@@ -154,31 +159,32 @@ def _handle_get_artifact_by_name(event: dict, path: str) -> dict:
         records = repo.fetch_by_name(name)
     except RepositoryError as exc:
         LOGGER.error("Failed to fetch artifact by name %s: %s", name, exc)
-        return _error_response(500, "Unable to query artifact metadata")
+        return _error_response(500, "Unable to query artifact metadata", log_prefix=log_prefix)
 
     if not records:
-        return _error_response(404, f"No artifact found with name '{name}'")
+        return _error_response(404, f"No artifact found with name '{name}'", log_prefix=log_prefix)
 
     print(f"[search.byName] found {len(records)} records", flush=True)
-    return _success_response([_artifact_metadata(r) for r in records])
+    return _success_response([_artifact_metadata(r) for r in records], log_prefix=log_prefix)
 
 
 def _handle_post_regex(event: dict) -> dict:
+    log_prefix = "[search.regex]"
     try:
         payload = _parse_json_body(event, expected_type=dict)
     except ValueError as exc:
-        return _error_response(400, str(exc))
+        return _error_response(400, str(exc), log_prefix=log_prefix)
 
     pattern = payload.get("regex")
     if pattern is None:
         pattern = payload.get("pattern")
     if not isinstance(pattern, str) or not pattern.strip():
-        return _error_response(400, "`regex` is required for regex search")
+        return _error_response(400, "`regex` is required for regex search", log_prefix=log_prefix)
 
     try:
         compiled = re.compile(pattern, re.IGNORECASE)
     except re.error as exc:
-        return _error_response(400, f"Invalid regular expression: {exc}")
+        return _error_response(400, f"Invalid regular expression: {exc}", log_prefix=log_prefix)
 
     limit = _clamp_limit(
         payload.get("limit")
@@ -193,13 +199,13 @@ def _handle_post_regex(event: dict) -> dict:
         artifacts, next_key = repo.regex_search(compiled, target, pagination.start_key)
     except RepositoryError as exc:
         LOGGER.error("Failed to run regex search: %s", exc)
-        return _error_response(500, "Unable to execute regex search")
+        return _error_response(500, "Unable to execute regex search", log_prefix=log_prefix)
 
     artifacts = artifacts[pagination.skip : pagination.skip + limit]
     plain_artifacts = [_artifact_metadata(a) for a in artifacts]
     if not plain_artifacts:
         print("[search.regex] no artifacts matched regex", flush=True)
-        return _error_response(404, "No artifact found under this regex.")
+        return _error_response(404, "No artifact found under this regex.", log_prefix=log_prefix)
 
     headers = _build_offset_header(next_key)
 
@@ -207,7 +213,7 @@ def _handle_post_regex(event: dict) -> dict:
         f"[search.regex] returning {len(plain_artifacts)} artifacts next={bool(next_key)}",
         flush=True,
     )
-    return _success_response(plain_artifacts, headers=headers)
+    return _success_response(plain_artifacts, headers=headers, log_prefix=log_prefix)
 
 
 # -----------------------------------------------------------------------------
@@ -354,14 +360,22 @@ def _get_header(event: dict, key: str) -> str | None:
     return None
 
 
-def _success_response(body: dict, headers: dict | None = None) -> dict:
+def _log_response(prefix: str, status_code: int) -> None:
+    print(f"[{prefix}] Responding with status {status_code}", flush=True)
+
+
+def _success_response(
+    body: dict, headers: dict | None = None, log_prefix: str = "search"
+) -> dict:
     _headers = {"Content-Type": "application/json"}
     if headers:
         _headers.update(headers)
+    _log_response(log_prefix, 200)
     return {"statusCode": 200, "headers": _headers, "body": json.dumps(body)}
 
 
-def _error_response(status_code: int, message: str) -> dict:
+def _error_response(status_code: int, message: str, log_prefix: str = "search") -> dict:
+    _log_response(log_prefix, status_code)
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},

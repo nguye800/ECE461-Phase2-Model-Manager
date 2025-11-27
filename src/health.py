@@ -279,6 +279,7 @@ def handler(event, context):
         return heartbeat_handler(event, context)
 
     print("[health.handler] no route matched", flush=True)
+    print("[health.handler] Responding with status 404", flush=True)
     return {
         "statusCode": 404,
         "headers": {"Content-Type": "application/json"},
@@ -476,6 +477,26 @@ def tracks_handler(event, context):
     """
 
     try:
+        body = {
+            "plannedTracks": [
+                "Security Track (waived from renegotiation)",
+            ],
+        }
+        print("[health.tracks] Returning planned tracks payload", flush=True)
+        print("[health.tracks] Responding with status 200", flush=True)
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(body),
+        }
+    except Exception as exc:  # pragma: no cover
+        print(f"[health.tracks] Unexpected error: {exc}", flush=True)
+        print("[health.tracks] Responding with status 500", flush=True)
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": "Unable to retrieve tracks"}),
+        }
         body = {
             "plannedTracks": [
                 "Security track",

@@ -12,6 +12,7 @@ MODEL_BUCKET_NAME = os.environ.get("MODEL_BUCKET_NAME", "modelzip-logs-artifacts
 
 
 def _build_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
+    print(f"[reset.lambda] Responding with status {status_code}", flush=True)
     return {
         "statusCode": status_code,
         "headers": {

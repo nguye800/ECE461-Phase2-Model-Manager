@@ -45,7 +45,8 @@ def _get_table():  # pragma: no cover - shim for tests
     return _table()
 
 
-def _response(status: int, body: Dict[str, Any]):
+def _response(status: int, body: Dict[str, Any], prefix: str = "[metadata]"):
+    print(f"{prefix} Responding with status {status}", flush=True)
     return {
         "statusCode": status,
         "headers": {"Content-Type": "application/json"},
@@ -71,6 +72,7 @@ def _not_found(artifact_type: str, artifact_id: str):
     return _response(
         404,
         {"message": f"Artifact '{artifact_type}/{artifact_id}' not found."},
+        prefix="[metadata.not_found]",
     )
 
 
@@ -411,8 +413,13 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
         metadata_item = _get_artifact(artifact_type, artifact_id)
 
         if method == "GET" and action == "cost":
+            if artifact_type not in {"model", "dataset", "code"}:
+                return _response(
+                    400,
+                    {"message": f"Unsupported artifact type '{artifact_type}'."},
+                )
             if not metadata_item:
-                return _response(400, {"message": f"Artifact id '{artifact_id}' not found."})
+                return _not_found(artifact_type, artifact_id)
             dependency_flag = _parse_bool(query.get("dependency"), False)
             try:
                 payload = _build_cost_payload(
