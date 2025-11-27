@@ -3,7 +3,8 @@ name: Deploy Lambdas to AWS (Container Image)
 on:
   push:
     branches:
-      - main  # Deploy when code is merged to main
+      - main
+      - shriya-autograder  # Deploy when code is merged to main
 
 permissions:
   id-token: write
