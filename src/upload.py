@@ -1467,7 +1467,7 @@ def _dependency_matches(
     pending_entry: Dict[str, Any],
     dependency_name: Optional[str],
     dependency_url: Optional[str],
-    dependency_alias: Optional[str],
+    dependency_alias: Optional[str] = None,
 ) -> bool:
     pending_url = pending_entry.get("url")
     pending_name = pending_entry.get("name")
