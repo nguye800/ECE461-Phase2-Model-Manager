@@ -45,14 +45,6 @@ def handler(event, context):
         f"[delete.lambda] Received {method or 'UNKNOWN'} {path or '/'} body={event.get('body')}",
         flush=True,
     )
-    token = _get_header(event.get("headers", {}) or {}, "X-Authorization")
-    if not token or (AUTH_TOKEN is not None and token != AUTH_TOKEN):
-        print("[delete.lambda] Authentication failed", flush=True)
-        return _build_response(
-            403,
-            {"error": "Authentication failed due to invalid or missing AuthenticationToken."},
-        )
-
     path_params = event.get("pathParameters") or {}
     artifact_type = path_params.get("artifact_type")
     artifact_id = path_params.get("id")
