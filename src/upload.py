@@ -1218,34 +1218,12 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             "url": findings.get("dataset_url"),
         }
 
-    code_names = [
-        findings.get("code_name"),
-        request.metadata.get("name"),
-        request.model_id,
-    ]
-    code_entry = _lookup_artifact_entry(
-        "code",
-        names=code_names,
-        urls=[findings.get("code_url")],
-    )
-    if code_entry:
-        code_url = code_entry.get("model_url") or code_entry.get("codebase", {}).get("url")
-        code_name = code_entry.get("name") or code_entry.get("metadata", {}).get("name")
-        if code_url:
-            request.code_repository = code_url
-            request.metadata.setdefault("codebase", {}).setdefault("url", code_url)
-        if code_name:
-            request.metadata.setdefault("codebase", {}).setdefault("name", code_name)
-        LOGGER.info(
-            "Autodiscovered codebase %s for model %s",
-            code_name or code_url,
-            request.model_id,
-        )
-    else:
-        # Same deferred flow for code when nothing exists yet; seed with the
-        # model name so we can match later if the repo uses a shorter alias.
+    # Code references are notoriously absent or noisy in READMEs, so we defer
+    # code discovery until a repository is explicitly uploaded and simply seed
+    # the pending dependency with the model name (plus any URL hint we saw).
+    if not request.metadata.get("codebase", {}).get("url") and not request.code_repository:
         pending["code"] = {
-            "name": findings.get("code_name") or request.metadata.get("name") or request.model_id,
+            "name": request.metadata.get("name") or request.model_id,
             "url": findings.get("code_url"),
         }
 
@@ -1429,9 +1407,10 @@ def _process_dependency_resolution(artifact_type: str, artifact_record: Dict[str
         or artifact_record.get("metadata", {}).get("name")
         or artifact_record.get("model_id")
     )
+    dependency_alias = artifact_record.get("metadata", {}).get("name") or artifact_record.get("name")
     table = _get_artifacts_table()
     pending_models = _find_models_waiting_on_dependency(
-        table, dependency_key, dependency_name, dependency_url
+        table, dependency_key, dependency_name, dependency_url, dependency_alias
     )
     for model_item in pending_models:
         updated = _apply_dependency_to_model(
@@ -1464,6 +1443,7 @@ def _find_models_waiting_on_dependency(
     dependency_key: str,
     dependency_name: Optional[str],
     dependency_url: Optional[str],
+    dependency_alias: Optional[str],
 ) -> List[Dict[str, Any]]:
     filter_expression = Attr("type").eq("MODEL") & Attr("pending_dependencies").exists()
     items: List[Dict[str, Any]] = []
@@ -1474,7 +1454,7 @@ def _find_models_waiting_on_dependency(
             pending = (item.get("pending_dependencies") or {}).get(dependency_key)
             if not pending:
                 continue
-            if _dependency_matches(pending, dependency_name, dependency_url):
+            if _dependency_matches(pending, dependency_name, dependency_url, dependency_alias):
                 items.append(item)
         last_key = response.get("LastEvaluatedKey")
         if not last_key:
@@ -1487,13 +1467,17 @@ def _dependency_matches(
     pending_entry: Dict[str, Any],
     dependency_name: Optional[str],
     dependency_url: Optional[str],
+    dependency_alias: Optional[str],
 ) -> bool:
     pending_url = pending_entry.get("url")
     pending_name = pending_entry.get("name")
     if pending_url and dependency_url and _normalize_str(pending_url) == _normalize_str(dependency_url):
         return True
-    if pending_name and dependency_name and _normalize_str(pending_name) == _normalize_str(dependency_name):
-        return True
+    if pending_name:
+        if dependency_name and _names_fuzzy_match(pending_name, dependency_name):
+            return True
+        if dependency_alias and _names_fuzzy_match(pending_name, dependency_alias):
+            return True
     return False
 
 
@@ -1501,6 +1485,20 @@ def _normalize_str(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
     return value.strip().lower()
+
+
+def _names_fuzzy_match(candidate: Optional[str], target: Optional[str]) -> bool:
+    norm_candidate = _normalize_name_for_matching(candidate)
+    norm_target = _normalize_name_for_matching(target)
+    if not norm_candidate or not norm_target:
+        return False
+    return norm_candidate in norm_target or norm_target in norm_candidate
+
+
+def _normalize_name_for_matching(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
 def _apply_dependency_to_model(
@@ -1539,6 +1537,14 @@ def _apply_dependency_to_model(
         model_item["pending_dependencies"] = pending
     else:
         model_item.pop("pending_dependencies", None)
+    metadata_block = model_item.get("metadata") or {}
+    metadata_pending = metadata_block.get("pending_dependencies")
+    if isinstance(metadata_pending, dict):
+        metadata_pending.pop(dependency_key, None)
+        if metadata_pending:
+            metadata_block["pending_dependencies"] = metadata_pending
+        else:
+            metadata_block.pop("pending_dependencies", None)
     model_item["updated_at"] = datetime.now(timezone.utc).isoformat()
     return model_item
 

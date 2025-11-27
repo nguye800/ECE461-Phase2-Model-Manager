@@ -38,9 +38,9 @@ _DDB_ARTIFACT_TYPES = ["MODEL", "DATASET", "CODE"]
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TABLE_NAME = os.environ.get("MODEL_REGISTRY_TABLE", "model_registry")
-DEFAULT_LIMIT = 25
+DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
-SCAN_BATCH_SIZE = 25
+SCAN_BATCH_SIZE = 50
 
 
 class RepositoryError(RuntimeError):
