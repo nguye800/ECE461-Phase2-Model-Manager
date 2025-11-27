@@ -1217,6 +1217,14 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             "name": findings.get("dataset_name"),
             "url": findings.get("dataset_url"),
         }
+        LOGGER.info(
+            "Model %s is waiting for dataset name=%s url=%s",
+            request.model_id,
+            findings.get("dataset_name"),
+            findings.get("dataset_url"),
+        )
+    else:
+        LOGGER.info("No dataset reference detected for model %s", request.model_id)
 
     # Code references are notoriously absent or noisy in READMEs, so we defer
     # code discovery until a repository is explicitly uploaded and simply seed
@@ -1226,6 +1234,14 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             "name": request.metadata.get("name") or request.model_id,
             "url": findings.get("code_url"),
         }
+        LOGGER.info(
+            "Model %s is waiting for code repository name=%s url=%s",
+            request.model_id,
+            pending["code"]["name"],
+            findings.get("code_url"),
+        )
+    else:
+        LOGGER.info("Model %s already has a codebase reference", request.model_id)
 
 
 def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
@@ -1421,9 +1437,10 @@ def _process_dependency_resolution(artifact_type: str, artifact_record: Dict[str
         try:
             _put_item(table, updated)
             LOGGER.info(
-                "Resolved pending %s dependency for model %s",
+                "Resolved pending %s dependency for model %s using artifact %s",
                 dependency_key,
                 updated.get("model_id"),
+                dependency_name or dependency_url,
             )
         except ClientError as exc:
             LOGGER.warning(
