@@ -232,13 +232,14 @@ def heartbeat_handler(event, context):
     """
 
     now = _now_iso()
+    print("[health.heartbeat] Probing DynamoDB and S3 reachability")
 
     dynamodb_status = _probe_dynamodb()
     s3_status = _probe_s3()
 
     all_ok = dynamodb_status["ok"] and s3_status["ok"]
 
-    # Always return HTTP 200 for /health, but mark status in the body.
+    # Always HTTP 200; encode failure in body status
     status_code = 200
     body = {
         "status": "ok" if all_ok else "critical",
@@ -264,9 +265,10 @@ def heartbeat_handler(event, context):
     }
 
 
+
 def handler(event, context):
     print("HEALTH HANDLER VERSION 3, event:", json.dumps(event)[:500])
-    
+
     """
     Unified Lambda entrypoint that dispatches /health and /health/components.
     """
