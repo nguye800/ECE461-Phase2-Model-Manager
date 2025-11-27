@@ -270,6 +270,10 @@ def handler(event, context):
         print("[health.handler] routing to components_handler", flush=True)
         return components_handler(event, context)
 
+    if method == "GET" and path_lower.endswith("/tracks"):
+        print("[health.handler] routing to tracks_handler", flush=True)
+        return tracks_handler(event, context)
+
     if method == "GET" and path_lower.endswith("/health"):
         print("[health.handler] routing to heartbeat_handler", flush=True)
         return heartbeat_handler(event, context)
@@ -462,3 +466,31 @@ def components_handler(event, context):
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(body),
     }
+
+
+def tracks_handler(event, context):
+    """
+    Handler for GET /tracks
+
+    Returns the list of planned tracks for the student.
+    """
+
+    try:
+        body = {
+            "plannedTracks": [
+                "Security Track (waived from renegotiation)",
+            ],
+        }
+        print("[health.tracks] Returning planned tracks payload", flush=True)
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(body),
+        }
+    except Exception as exc:  # pragma: no cover
+        print(f"[health.tracks] Unexpected error: {exc}", flush=True)
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": "Unable to retrieve tracks"}),
+        }
