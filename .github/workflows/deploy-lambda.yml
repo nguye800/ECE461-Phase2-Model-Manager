@@ -4,11 +4,7 @@ on:
   push:
     branches:
       - main  # Deploy when code is merged to main
-<<<<<<< HEAD
       - autograder-testing
-=======
-      - lucas-autograder
->>>>>>> origin/lucas-autograder
 
 permissions:
   id-token: write
