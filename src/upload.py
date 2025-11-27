@@ -519,6 +519,23 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
     now = datetime.now(timezone.utc).isoformat()
     download_url = _build_download_url(bucket_name, object_key)
 
+    metadata_block = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    request = None
+    if artifact_type == "model":
+        # Reuse the same discovery flow as the legacy uploader so spec uploads
+        # can infer datasets/codebases and queue scoring immediately when possible.
+        request = UploadRequest(
+            model_id=artifact_id,
+            model_url=source_url,
+            metadata=metadata_block.copy(),
+            artifacts=[],
+        )
+        try:
+            _discover_related_resources_for_model(request)
+        except Exception as exc:
+            LOGGER.warning("Spec create autodiscovery failed for %s: %s", artifact_id, exc)
+        metadata_block = request.metadata
+
     item = _build_spec_registry_item(
         artifact_type,
         artifact_id,
@@ -531,6 +548,15 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
         size_bytes,
         checksum,
     )
+    if metadata_block:
+        item["metadata"].update(metadata_block)
+    if artifact_type == "model":
+        if metadata_block.get("dataset"):
+            item["dataset"] = metadata_block["dataset"]
+        if metadata_block.get("codebase"):
+            item["codebase"] = metadata_block["codebase"]
+        if metadata_block.get("pending_dependencies"):
+            item["pending_dependencies"] = metadata_block["pending_dependencies"]
     item["created_at"] = now
     item["updated_at"] = now
     item.setdefault("audits", [])
