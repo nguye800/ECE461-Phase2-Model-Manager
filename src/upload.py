@@ -545,6 +545,9 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
     _process_dependency_resolution(artifact_type, item)
     scoring_urls = _collect_scoring_urls(item)
     if scoring_urls:
+        LOGGER.info(
+            "Enqueuing scoring job for new %s artifact %s (all URLs present)", artifact_type, artifact_id
+        )
         _enqueue_scoring_job(artifact_id, scoring_urls)
     print(
         f"[upload.spec.create] Completed creation for {artifact_type}/{artifact_id}",
@@ -1160,6 +1163,7 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
         LOGGER.debug("No README detected for %s; skipping autodiscovery.", request.model_id)
         return
 
+    # Ask Bedrock/heuristics which dataset/code the README references.
     findings = _analyze_readme_entities(readme_text)
     pending = request.metadata.setdefault("pending_dependencies", {})
     dataset_entry = _lookup_artifact_entry(
@@ -1182,6 +1186,7 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             request.model_id,
         )
     elif findings.get("dataset_name") or findings.get("dataset_url"):
+        # Record what we saw so we can attach the dataset later when it exists.
         pending["dataset"] = {
             "name": findings.get("dataset_name"),
             "url": findings.get("dataset_url"),
@@ -1211,6 +1216,7 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             request.model_id,
         )
     elif findings.get("code_name") or findings.get("code_url"):
+        # Same deferred flow for code when nothing exists yet.
         pending["code"] = {
             "name": findings.get("code_name"),
             "url": findings.get("code_url"),
