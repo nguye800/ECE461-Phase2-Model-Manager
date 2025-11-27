@@ -571,7 +571,7 @@ class ArtifactRepository:
                 scan_limit = max(total_needed - len(matched), SCAN_BATCH_SIZE)
                 scan_kwargs: dict[str, Any] = {
                     "FilterExpression": Attr("sk").eq("META")
-                    & Attr("type").is_in(*_DDB_ARTIFACT_TYPES),
+                    & Attr("type").is_in(_DDB_ARTIFACT_TYPES),
                     "Limit": scan_limit,
                 }
                 if exclusive_start:
