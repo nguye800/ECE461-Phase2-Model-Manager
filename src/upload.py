@@ -531,6 +531,10 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
     scoring_urls = _collect_scoring_urls(item)
     if scoring_urls:
         _enqueue_scoring_job(artifact_id, scoring_urls)
+    print(
+        f"[upload.spec.create] Completed creation for {artifact_type}/{artifact_id}",
+        flush=True,
+    )
     return _format_response(201, {"metadata": item["metadata"], "data": item["data"]})
 
 
@@ -654,6 +658,10 @@ def _handle_spec_artifact_update(
     scoring_urls = _collect_scoring_urls(updated_item)
     if scoring_urls:
         _enqueue_scoring_job(artifact_id, scoring_urls)
+    print(
+        f"[upload.spec.update] Completed update for {artifact_type}/{artifact_id}",
+        flush=True,
+    )
     return _format_response(200, {"metadata": updated_item["metadata"], "data": updated_item["data"]})
 
 
@@ -679,8 +687,8 @@ def _get_artifacts_table():
     if _ARTIFACTS_TABLE is not None:
         return _ARTIFACTS_TABLE
 
-    table_name = _require_env("ARTIFACTS_DDB_TABLE")
-    region = os.getenv("ARTIFACTS_DDB_REGION")
+    table_name = _require_env("ARTIFACTS_DDB_TABLE", "model-metadata")
+    region = os.getenv("ARTIFACTS_DDB_REGION", "us-east-1")
     session: Session = boto3.session.Session()
     dynamo = session.resource("dynamodb", region_name=region) if region else session.resource("dynamodb")
     _ARTIFACTS_TABLE = dynamo.Table(table_name)
@@ -1216,6 +1224,7 @@ def _apply_extracted_metadata(request: UploadRequest, extracted: Dict[str, Any])
 
 def _format_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
     """Create a standard Lambda proxy response."""
+    print(f"[upload.lambda] Responding with status {status_code}", flush=True)
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},
@@ -1230,15 +1239,26 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     The function returns an API Gateway compatible response. Errors are surfaced
     with a 400-level status code (client issues) or 500-level (server issues).
     """
+    method = _extract_http_method(event)
+    path = _extract_path(event)
+    print(
+        f"[upload.lambda] Received {method or 'UNKNOWN'} {path or '/'} body={event.get('body')}",
+        flush=True,
+    )
     try:
         spec_operation = _identify_spec_operation(event)
         if spec_operation:
             operation, artifact_type, artifact_id = spec_operation
             if operation == "create":
+                print(f"[upload.lambda] Routing to spec create {artifact_type}", flush=True)
                 return _handle_spec_artifact_create(event, artifact_type)
             if operation == "update":
                 if not artifact_id:
                     raise UploadError("Artifact id is required for update requests.")
+                print(
+                    f"[upload.lambda] Routing to spec update {artifact_type}/{artifact_id}",
+                    flush=True,
+                )
                 return _handle_spec_artifact_update(event, artifact_type, artifact_id)
 
         request = UploadRequest.from_event(event)
@@ -1274,22 +1294,30 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "artifacts": uploaded_artifacts,
             "scoring_job_enqueued": queued_scoring_job,
         }
+        print(
+            f"[upload.lambda] Completed generic upload action={action} model_id={request.model_id}",
+            flush=True,
+        )
         return _format_response(200, response_body)
 
     except ArtifactNotFound as err:
         LOGGER.error("Artifact not found error: %s", err, exc_info=True)
+        print(f"[upload.lambda] Artifact not found error: {err}", flush=True)
         return _format_response(404, {"status": "error", "message": str(err)})
 
     except UploadError as err:
         LOGGER.error("Upload error: %s", err, exc_info=True)
+        print(f"[upload.lambda] Upload error: {err}", flush=True)
         return _format_response(400, {"status": "error", "message": str(err)})
 
     except (BotoCoreError, ClientError) as err:
         LOGGER.error("AWS service error: %s", err, exc_info=True)
+        print(f"[upload.lambda] AWS service error: {err}", flush=True)
         return _format_response(502, {"status": "error", "message": "AWS service failure"})
 
     except Exception as err:  # pragma: no cover - defensive catch-all
         LOGGER.exception("Unexpected error during upload")
+        print(f"[upload.lambda] Unexpected error: {err}", flush=True)
         return _format_response(500, {"status": "error", "message": str(err)})
 
 

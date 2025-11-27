@@ -98,6 +98,10 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
     elif event is None:
         event = {}
 
+    print(
+        f"[rate.sqs] Received batch with {len(event.get('Records', [])) if isinstance(event, dict) else 0} records",
+        flush=True,
+    )
     if "Records" not in event:
         logger.warning("rate handler invoked without SQS Records payload.")
         return {"batchItemFailures": []}
@@ -117,12 +121,15 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
             _score_model(model_id)
         except RateException as exc:
             logger.error("Failed to score model from SQS: %s", exc)
+            print(f"[rate.sqs] RateException for message {message_id}: {exc}", flush=True)
             if message_id:
                 failures.append({"itemIdentifier": message_id})
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Unexpected error processing SQS record")
             if message_id:
                 failures.append({"itemIdentifier": message_id})
+            print(f"[rate.sqs] Unexpected error for message {message_id}: {exc}", flush=True)
+    print(f"[rate.sqs] Processing complete failures={len(failures)}", flush=True)
     return {"batchItemFailures": failures}
 
 

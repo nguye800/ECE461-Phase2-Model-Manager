@@ -113,7 +113,7 @@ class MetadataLambdaTests(unittest.TestCase):
         self.patch.start()
         self.s3_patch = patch("src.metadata._s3_client", return_value=FakeS3())
         self.fake_s3 = self.s3_patch.start()
-        os.environ["ARTIFACTS_DDB_TABLE"] = "ModelArtifacts"
+        os.environ["ARTIFACTS_DDB_TABLE"] = "model-metadata"
 
     def tearDown(self):
         self.patch.stop()

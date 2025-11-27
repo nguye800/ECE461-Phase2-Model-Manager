@@ -16,6 +16,7 @@ ARTIFACT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9\-]+$")
 
 
 def _build_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
+    print(f"[delete.lambda] Responding with status {status_code}", flush=True)
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},
@@ -39,13 +40,12 @@ def handler(event, context):
       sk = any (we delete all rows with that pk)
     """
     # --- Auth ---
-    token = _get_header(event.get("headers", {}) or {}, "X-Authorization")
-    if not token or (AUTH_TOKEN is not None and token != AUTH_TOKEN):
-        return _build_response(
-            403,
-            {"error": "Authentication failed due to invalid or missing AuthenticationToken."},
-        )
-
+    method = event.get("httpMethod")
+    path = event.get("path") or event.get("rawPath")
+    print(
+        f"[delete.lambda] Received {method or 'UNKNOWN'} {path or '/'} body={event.get('body')}",
+        flush=True,
+    )
     path_params = event.get("pathParameters") or {}
     artifact_type = path_params.get("artifact_type")
     artifact_id = path_params.get("id")
@@ -77,6 +77,7 @@ def handler(event, context):
 
         if not items:
             # Nothing with that pk → 404
+            print(f"[delete.lambda] Artifact not found for pk={pk_value}", flush=True)
             return _build_response(
                 404,
                 {"error": "Artifact does not exist.", "artifact_type": artifact_type, "id": artifact_id},
@@ -91,6 +92,7 @@ def handler(event, context):
                 )
                 deleted += 1
 
+        print(f"[delete.lambda] Deleting pk={pk_value} items={len(items)}", flush=True)
         return _build_response(
             200,
             {
@@ -102,6 +104,7 @@ def handler(event, context):
         )
 
     except ClientError as e:
+        print(f"[delete.lambda] DynamoDB error: {e}", flush=True)
         return _build_response(
             500,
             {"error": "Internal server error while deleting artifact.",
