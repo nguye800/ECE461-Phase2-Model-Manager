@@ -119,6 +119,7 @@ def _handle_post_artifacts(event: dict) -> dict:
     if next_key:
         headers["x-next-offset"] = _encode_pagination_token(next_key)
 
+
     # Maintain token OR numeric offset exactly as user supplied
     if isinstance(offset_input, str) and offset_input.strip() and not offset_input.isdigit():
         normalized_offset = offset_input
