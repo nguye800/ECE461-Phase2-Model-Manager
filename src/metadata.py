@@ -14,9 +14,9 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-ARTIFACTS_TABLE_NAME = os.environ.get("ARTIFACTS_DDB_TABLE", "ModelArtifacts")
-ARTIFACTS_DDB_REGION = os.environ.get("ARTIFACTS_DDB_REGION")
-DEFAULT_MODEL_BUCKET = os.environ.get("MODEL_BUCKET_NAME")
+ARTIFACTS_TABLE_NAME = os.environ.get("ARTIFACTS_DDB_TABLE", "model-metadata")
+ARTIFACTS_DDB_REGION = os.environ.get("ARTIFACTS_DDB_REGION", "us-east-1")
+DEFAULT_MODEL_BUCKET = os.environ.get("MODEL_BUCKET_NAME", "modelzip-logs-artifacts")
 S3_CLIENT = boto3.client("s3")
 
 BYTES_IN_MB = 1024 * 1024

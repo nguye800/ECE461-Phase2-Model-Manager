@@ -675,8 +675,8 @@ def _get_artifacts_table():
     if _ARTIFACTS_TABLE is not None:
         return _ARTIFACTS_TABLE
 
-    table_name = _require_env("ARTIFACTS_DDB_TABLE")
-    region = os.getenv("ARTIFACTS_DDB_REGION")
+    table_name = _require_env("ARTIFACTS_DDB_TABLE", "model-metadata")
+    region = os.getenv("ARTIFACTS_DDB_REGION", "us-east-1")
     session: Session = boto3.session.Session()
     dynamo = session.resource("dynamodb", region_name=region) if region else session.resource("dynamodb")
     _ARTIFACTS_TABLE = dynamo.Table(table_name)
