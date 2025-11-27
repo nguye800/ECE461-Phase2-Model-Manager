@@ -8,7 +8,7 @@ from botocore.exceptions import ClientError, BotoCoreError
 dynamodb = boto3.resource("dynamodb")
 s3_client = boto3.client("s3")
 TABLE_NAME = os.environ.get("ARTIFACTS_TABLE_NAME", "model-metadata")
-MODEL_BUCKET_NAME = os.environ.get("MODEL_BUCKET_NAME")
+MODEL_BUCKET_NAME = os.environ.get("MODEL_BUCKET_NAME", "modelzip-logs-artifacts")
 
 
 def _build_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
