@@ -111,14 +111,20 @@ def _handle_post_artifacts(event: dict) -> dict:
             )
         normalized_query = dict(query)
         normalized_query["name"] = str(query.get("name") or "*").strip() or "*"
+        original_types = query.get("types")
         try:
-            normalized_types = _normalize_type_filters(query.get("types"))
+            normalized_types = _normalize_type_filters(original_types)
         except ValueError as exc:
             return _error_response(400, str(exc), log_prefix=log_prefix)
         if normalized_types is not None:
             normalized_query["types"] = normalized_types
         else:
             normalized_query.pop("types", None)
+            if isinstance(original_types, list) and not original_types:
+                print(
+                    "[search.post_artifacts] treating blank 'types' filter as wildcard",
+                    flush=True,
+                )
         normalized_queries.append(normalized_query)
 
     limit = _clamp_limit(
@@ -137,6 +143,13 @@ def _handle_post_artifacts(event: dict) -> dict:
 
     artifacts = artifacts[pagination.skip : pagination.skip + limit]
     plain_artifacts = [_artifact_metadata(a) for a in artifacts]
+
+    if len(plain_artifacts) > DEFAULT_LIMIT:
+        print(
+            f"[search.post_artifacts] rejecting {len(plain_artifacts)} artifacts (> {DEFAULT_LIMIT})",
+            flush=True,
+        )
+        return _error_response(413, "too many artifacts returned.", log_prefix=log_prefix)
 
     headers = _build_offset_header(next_key)
 
@@ -406,7 +419,7 @@ def _normalize_type_filters(types_value: Any) -> list[str] | None:
         if normalized_entry:
             normalized.append(normalized_entry)
     if not normalized:
-        raise ValueError("`types` must include at least one artifact type")
+        return None
     return normalized
 
 

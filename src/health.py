@@ -479,7 +479,7 @@ def tracks_handler(event, context):
     try:
         body = {
             "plannedTracks": [
-                "Security Track (waived from renegotiation)",
+                "Other Security track",
             ],
         }
         print("[health.tracks] Returning planned tracks payload", flush=True)
