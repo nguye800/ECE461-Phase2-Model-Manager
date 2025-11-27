@@ -32,6 +32,9 @@ from urllib.parse import unquote_plus
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
+
+_DDB_ARTIFACT_TYPES = ["MODEL", "DATASET", "CODE"]
+
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TABLE_NAME = os.environ.get("MODEL_REGISTRY_TABLE", "model_registry")
@@ -518,16 +521,20 @@ class ArtifactRepository:
         return self._scan_models(total_needed, start_key, predicate)
 
     def fetch_by_name(self, name: str) -> list[dict]:
+        matched: list[dict] = []
+        lower_name = name.lower()
         try:
-            response = self.table.query(
-                IndexName="GSI_ALPHABET_LISTING",
-                KeyConditionExpression=Key("type").eq("MODEL") 
-                                    & Key("name_lc").eq(name.lower()),
-            )
+            for artifact_type in _DDB_ARTIFACT_TYPES:
+                response = self.table.query(
+                    IndexName="GSI_ALPHABET_LISTING",
+                    KeyConditionExpression=Key("type").eq(artifact_type)
+                    & Key("name_lc").eq(lower_name),
+                )
+                matched.extend(response.get("Items", []))
         except Exception as exc:
             raise RepositoryError(str(exc)) from exc
 
-        return response.get("Items", [])
+        return matched
 
     
 
@@ -563,7 +570,8 @@ class ArtifactRepository:
             while len(matched) < total_needed:
                 scan_limit = max(total_needed - len(matched), SCAN_BATCH_SIZE)
                 scan_kwargs: dict[str, Any] = {
-                    "FilterExpression": Attr("type").eq("MODEL") & Attr("sk").eq("META"),
+                    "FilterExpression": Attr("sk").eq("META")
+                    & Attr("type").is_in(*_DDB_ARTIFACT_TYPES),
                     "Limit": scan_limit,
                 }
                 if exclusive_start:
