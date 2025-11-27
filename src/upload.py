@@ -35,8 +35,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 
 import boto3
+import requests
 from boto3.dynamodb.types import TypeSerializer
 from boto3.session import Session
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
 
 LOGGER = logging.getLogger(__name__)
@@ -46,11 +48,36 @@ DEFAULT_SCORING_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/965919626283/en
 SCORING_QUEUE_ARN = "arn:aws:sqs:us-east-1:965919626283:enqueue-rate"
 MODEL_BUCKET_NAME = "modelzip-logs-artifacts"
 STREAM_CHUNK_SIZE = 8 * 1024 * 1024
+BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "meta.llama3-8b-instruct-v1:0")
+README_ANALYSIS_PROMPT = (
+    "You are analyzing the README for a Hugging Face model. "
+    "Identify if it references a dataset (typically a Hugging Face dataset) and/or a GitHub code repository. "
+    "Respond with JSON using this schema: "
+    '{"dataset_name": "<name or null>", "dataset_url": "<url or null>", '
+    '"code_name": "<name or null>", "code_url": "<github url or null>"}.\n'
+    "If multiple candidates exist, pick the most prominent. Use null when unsure."
+)
+MAX_README_CHARS = 6000
+HUGGINGFACE_REPO_PATTERN = re.compile(
+    r"(?:https?://)?(?:www\.)?huggingface\.co/([^/]+)/([^/\s]+)"
+)
+HUGGINGFACE_DATASET_PATTERN = re.compile(
+    r"(https?://huggingface\.co/datasets/[^/\s]+/[^/\s)]+)"
+)
+GITHUB_REPO_PATTERN = re.compile(
+    r"(https?://github\.com/[\w\-.]+/[\w\-.]+)"
+)
 
 _S3_CLIENT: Optional[boto3.client] = None
 _SQS_CLIENT: Optional[boto3.client] = None
 _ARTIFACTS_TABLE = None
 _DYNAMODB_SERIALIZER = TypeSerializer()
+try:  # pragma: no cover - requires AWS creds
+    _BEDROCK_CLIENT = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
+except Exception as exc:  # pragma: no cover
+    _BEDROCK_CLIENT = None
+    LOGGER.debug("Bedrock client unavailable: %s", exc)
 
 _ALLOWED_ARTIFACT_TYPES = {"model", "dataset", "code"}
 
@@ -1115,6 +1142,229 @@ def _extract_first_url(text: str) -> Optional[str]:
     return match.group(0) if match else None
 
 
+def _discover_related_resources_for_model(request: UploadRequest) -> None:
+    readme_text = _fetch_hf_model_readme(request.model_url)
+    if not readme_text:
+        LOGGER.debug("No README detected for %s; skipping autodiscovery.", request.model_id)
+        return
+
+    findings = _analyze_readme_entities(readme_text)
+    dataset_entry = _lookup_artifact_entry(
+        "dataset",
+        names=[findings.get("dataset_name")],
+        urls=[findings.get("dataset_url")],
+    )
+    if dataset_entry:
+        dataset_url = dataset_entry.get("model_url") or dataset_entry.get("dataset", {}).get("url")
+        dataset_name = dataset_entry.get("name") or dataset_entry.get("metadata", {}).get("name")
+        if dataset_url:
+            request.dataset_link = dataset_url
+            request.metadata.setdefault("dataset", {}).setdefault("url", dataset_url)
+        if dataset_name:
+            request.dataset_name = dataset_name
+            request.metadata.setdefault("dataset", {}).setdefault("name", dataset_name)
+        LOGGER.info(
+            "Autodiscovered dataset %s for model %s",
+            dataset_name or dataset_url,
+            request.model_id,
+        )
+
+    code_names = [
+        findings.get("code_name"),
+        request.metadata.get("name"),
+        request.model_id,
+    ]
+    code_entry = _lookup_artifact_entry(
+        "code",
+        names=code_names,
+        urls=[findings.get("code_url")],
+    )
+    if code_entry:
+        code_url = code_entry.get("model_url") or code_entry.get("codebase", {}).get("url")
+        code_name = code_entry.get("name") or code_entry.get("metadata", {}).get("name")
+        if code_url:
+            request.code_repository = code_url
+            request.metadata.setdefault("codebase", {}).setdefault("url", code_url)
+        if code_name:
+            request.metadata.setdefault("codebase", {}).setdefault("name", code_name)
+        LOGGER.info(
+            "Autodiscovered codebase %s for model %s",
+            code_name or code_url,
+            request.model_id,
+        )
+
+
+def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
+    if not model_url:
+        return None
+    owner, repo = _extract_hf_repo_segments(model_url)
+    if not owner or not repo:
+        return None
+    for candidate in _candidate_model_readme_urls(owner, repo):
+        text = _safe_http_get(candidate)
+        if text:
+            return text
+    return None
+
+
+def _extract_hf_repo_segments(url: str) -> Tuple[Optional[str], Optional[str]]:
+    match = HUGGINGFACE_REPO_PATTERN.search(url)
+    if match:
+        return match.group(1), match.group(2)
+    parts = url.rstrip("/").split("/")
+    if len(parts) >= 2:
+        return parts[-2], parts[-1]
+    return None, None
+
+
+def _candidate_model_readme_urls(owner: str, repo: str) -> List[str]:
+    base = f"https://huggingface.co/{owner}/{repo}"
+    return [
+        f"{base}/raw/main/README.md",
+        f"{base}/raw/master/README.md",
+        f"{base}/resolve/main/README.md",
+        f"{base}/resolve/master/README.md",
+    ]
+
+
+def _safe_http_get(url: str) -> Optional[str]:
+    try:
+        resp = requests.get(
+            url,
+            timeout=15,
+            headers={"User-Agent": "model-manager/1.0"},
+        )
+        resp.raise_for_status()
+        return resp.text
+    except Exception:
+        return None
+
+
+def _analyze_readme_entities(readme_text: str) -> Dict[str, Optional[str]]:
+    excerpt = (readme_text or "").strip()
+    if not excerpt:
+        return {}
+    if len(excerpt) > MAX_README_CHARS:
+        excerpt = excerpt[:MAX_README_CHARS]
+
+    prompt = f"{README_ANALYSIS_PROMPT}\n\nREADME Content:\n```\n{excerpt}\n```"
+    parsed = _invoke_bedrock_analysis(prompt)
+    if not isinstance(parsed, dict):
+        parsed = _heuristic_related_entities(excerpt)
+    return {
+        "dataset_name": parsed.get("dataset_name"),
+        "dataset_url": parsed.get("dataset_url"),
+        "code_name": parsed.get("code_name"),
+        "code_url": parsed.get("code_url"),
+    }
+
+
+def _invoke_bedrock_analysis(prompt: str) -> Optional[Dict[str, Optional[str]]]:
+    client = _BEDROCK_CLIENT
+    if client is None:
+        return None
+
+    body = {
+        "prompt": f"<s>[INST] {prompt} [/INST]",
+        "max_gen_len": 400,
+        "temperature": 0.0,
+        "top_p": 0.9,
+    }
+
+    try:  # pragma: no cover - requires AWS access
+        response = client.invoke_model(
+            modelId=BEDROCK_MODEL_ID,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(body),
+        )
+        raw = response.get("body")
+        payload = (
+            json.loads(raw.read().decode("utf-8"))
+            if hasattr(raw, "read")
+            else json.loads(raw)
+        )
+        text = payload.get("generation") or ""
+        if not text and "generations" in payload:
+            generations = payload.get("generations") or []
+            if generations:
+                text = generations[0].get("text", "")
+        text = text.strip()
+        if not text:
+            return None
+        return json.loads(text)
+    except Exception as exc:  # pragma: no cover
+        LOGGER.debug("Bedrock README analysis failed: %s", exc)
+        return None
+
+
+def _heuristic_related_entities(text: str) -> Dict[str, Optional[str]]:
+    dataset_url = None
+    dataset_match = HUGGINGFACE_DATASET_PATTERN.search(text)
+    if dataset_match:
+        dataset_url = dataset_match.group(1)
+    code_url_match = GITHUB_REPO_PATTERN.search(text)
+    code_url = code_url_match.group(1) if code_url_match else None
+    return {
+        "dataset_url": dataset_url,
+        "dataset_name": _infer_name_from_url(dataset_url) if dataset_url else None,
+        "code_url": code_url,
+        "code_name": _infer_name_from_url(code_url) if code_url else None,
+    }
+
+
+def _lookup_artifact_entry(
+    artifact_type: str,
+    *,
+    names: Optional[Iterable[Optional[str]]] = None,
+    urls: Optional[Iterable[Optional[str]]] = None,
+) -> Optional[Dict[str, Any]]:
+    table = _get_artifacts_table()
+    normalized_urls = [url for url in (urls or []) if _is_valid_url(url)]
+    for url in normalized_urls:
+        entry = _scan_artifact_by_url(table, artifact_type, url)
+        if entry:
+            return entry
+    for name in names or []:
+        if not name:
+            continue
+        entry = _query_artifact_by_name(table, artifact_type, name)
+        if entry:
+            return entry
+    return None
+
+
+def _scan_artifact_by_url(table, artifact_type: str, url: str) -> Optional[Dict[str, Any]]:
+    try:
+        response = table.scan(
+            FilterExpression=Attr("type").eq(artifact_type.upper()) & Attr("model_url").eq(url),
+            Limit=1,
+        )
+    except ClientError as exc:
+        LOGGER.debug("Failed to scan for %s url=%s: %s", artifact_type, url, exc)
+        return None
+    items = response.get("Items") or []
+    return items[0] if items else None
+
+
+def _query_artifact_by_name(table, artifact_type: str, name: str) -> Optional[Dict[str, Any]]:
+    name_lc = name.strip().lower()
+    if not name_lc:
+        return None
+    try:
+        response = table.query(
+            IndexName="GSI_ALPHABET_LISTING",
+            KeyConditionExpression=Key("type").eq(artifact_type.upper())
+            & Key("name_lc").eq(name_lc),
+            Limit=1,
+        )
+    except ClientError as exc:
+        LOGGER.debug("Failed to query %s by name=%s: %s", artifact_type, name, exc)
+        return None
+    items = response.get("Items") or []
+    return items[0] if items else None
+
+
 def _extract_zip_metadata(artifact: ArtifactDescriptor, data: bytes) -> Dict[str, Any]:
     """
     Attempt to gather metadata from a ZIP archive containing the model payload.
@@ -1250,9 +1500,18 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 return _handle_spec_artifact_update(event, artifact_type, artifact_id)
 
         request = UploadRequest.from_event(event)
+        artifact_type = _extract_artifact_type(event)
+        if artifact_type == "model":
+            try:
+                _discover_related_resources_for_model(request)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Automatic related-resource discovery failed for %s: %s",
+                    request.model_id,
+                    exc,
+                )
 
         bucket_name = MODEL_BUCKET_NAME
-        artifact_type = _extract_artifact_type(event)
         table = _get_artifacts_table()
 
         uploaded_artifacts = _upload_artifacts(request, bucket_name)

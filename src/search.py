@@ -167,6 +167,7 @@ def _handle_get_artifact_by_name(event: dict, path: str) -> dict:
     log_prefix = "[search.byName]"
     name = _extract_name_parameter(event, path)
     if not name:
+        print(f"[search.byName] Missing artifact name in path", flush=True)
         return _error_response(400, "Missing artifact name in path", log_prefix=log_prefix)
     print(f"[search.byName] looking up name={name}", flush=True)
 

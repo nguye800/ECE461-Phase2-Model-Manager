@@ -44,6 +44,7 @@ class TreeScoreMetric(BaseMetric):
 
     def __init__(self):
         super().__init__()
+        self.parent_details: List[dict] = []
 
     @override
     def setup_resources(self):
@@ -261,6 +262,7 @@ class TreeScoreMetric(BaseMetric):
         if self.url is None or self.url.model is None:
             return 0.0
 
+        self.parent_details = []
         try:
             repo_id = extract_model_repo_id(self.url.model)
         except Exception as e:
@@ -372,6 +374,17 @@ class TreeScoreMetric(BaseMetric):
                         print(f"  - metric={getattr(m,'metric_name','?')} error printing score: {m_err}")
                 print(f"  > parent_net_score={output.score}")
                 scores.append(float(output.score))
+                self.parent_details.append(
+                    {
+                        "repo_id": parent_id,
+                        "model_url": parent_url,
+                        "dataset_url": parent_urls.dataset,
+                        "codebase_url": parent_urls.codebase,
+                        "score": float(output.score),
+                        "source": "config_json",
+                        "name": parent_id.split("/")[-1] if parent_id else parent_id,
+                    }
+                )
             except Exception as e:
                 print(f"[TreeScore] Failed to score parent {parent_id}: {e}")
                 continue
