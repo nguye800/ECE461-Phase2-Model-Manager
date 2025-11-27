@@ -9,7 +9,6 @@ dynamodb = boto3.resource("dynamodb")
 s3_client = boto3.client("s3")
 TABLE_NAME = os.environ.get("ARTIFACTS_TABLE_NAME", "model-metadata")
 MODEL_BUCKET_NAME = os.environ.get("MODEL_BUCKET_NAME")
-AUTH_TOKEN = os.environ.get("AUTH_TOKEN")  # same shared secret as other endpoints
 
 
 def _build_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,8 +103,7 @@ def handler(event, context):
       description: Reset the registry to a system default state.
       responses:
         200: Registry is reset.
-        401: Not used here; we’ll fold into 403.
-        403: Authentication failed.
+        500: Internal errors during reset.
     """
     method = event.get("httpMethod")
     path = event.get("path") or event.get("rawPath")
@@ -113,13 +111,6 @@ def handler(event, context):
         f"[reset.lambda] Received {method or 'UNKNOWN'} {path or '/'} body={event.get('body')}",
         flush=True,
     )
-    token = _get_header(event.get("headers", {}) or {}, "X-Authorization")
-    if not token or (AUTH_TOKEN is not None and token != AUTH_TOKEN):
-        print("[reset.lambda] Authentication failed", flush=True)
-        return _build_response(
-            403,
-            {"error": "Authentication failed due to invalid or missing AuthenticationToken."},
-        )
 
     try:
         deleted_count = _clear_table(TABLE_NAME)
