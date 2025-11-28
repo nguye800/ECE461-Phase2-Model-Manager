@@ -67,9 +67,6 @@ HUGGINGFACE_DATASET_PATTERN = re.compile(
 GITHUB_REPO_PATTERN = re.compile(
     r"(https?://github\.com/[\w\-.]+/[\w\-.]+)"
 )
-HUGGINGFACE_MODEL_URL_PATTERN = re.compile(
-    r"(https?://huggingface\.co/(?!datasets/)[\w\-.]+/[\w\-.]+)"
-)
 KNOWN_DATASET_ALIASES = {
     "imagenet": "ILSVRC/imagenet-1k",
     "imagenet-1k": "ILSVRC/imagenet-1k",
@@ -556,7 +553,7 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
 
     _put_item(table, item)
     _process_dependency_resolution(artifact_type, item)
-    scoring_urls = _collect_scoring_urls(item)
+    scoring_urls = _collect_scoring_urls(item) if artifact_type == "model" else None
     if scoring_urls:
         LOGGER.info(
             "Enqueuing scoring job for new %s artifact %s (all URLs present)", artifact_type, artifact_id
@@ -686,7 +683,7 @@ def _handle_spec_artifact_update(
         user=_resolve_request_user(payload),
     )
     _put_item(table, updated_item)
-    scoring_urls = _collect_scoring_urls(updated_item)
+    scoring_urls = _collect_scoring_urls(updated_item) if artifact_type == "model" else None
     if scoring_urls:
         _enqueue_scoring_job(artifact_id, scoring_urls)
     print(
@@ -759,11 +756,11 @@ def _is_valid_url(value: Optional[str]) -> bool:
 def _model_ready_for_scoring(
     model_url: Optional[str], codebase_url: Optional[str], dataset_url: Optional[str]
 ) -> bool:
-    """A model is ready for scoring when at least the model URL exists."""
-    return _is_valid_url(model_url)
+    """A model is ready for scoring when URLs for model, code, and data exist."""
+    return all(_is_valid_url(url) for url in (model_url, codebase_url, dataset_url))
 
 
-def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest] = None) -> Optional[Dict[str, Optional[str]]]:
+def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest] = None) -> Optional[Dict[str, str]]:
     dataset = item.get("dataset") or {}
     codebase = item.get("codebase") or {}
     model_url = item.get("model_url") or (request.model_url if request else None)
@@ -773,13 +770,13 @@ def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest]
         codebase_url = codebase_url or _resolve_codebase_url(request)
         dataset_url = dataset_url or _resolve_dataset_url(request)
 
-    if not _model_ready_for_scoring(model_url, codebase_url, dataset_url):
-        return None
-    return {
-        "model_url": model_url,
-        "codebase_url": codebase_url if _is_valid_url(codebase_url) else None,
-        "dataset_url": dataset_url if _is_valid_url(dataset_url) else None,
-    }
+    if _model_ready_for_scoring(model_url, codebase_url, dataset_url):
+        return {
+            "model_url": model_url,
+            "codebase_url": codebase_url,
+            "dataset_url": dataset_url,
+        }
+    return None
 
 
 def _enqueue_scoring_job(model_id: str, urls: Dict[str, str]) -> bool:
@@ -1244,76 +1241,116 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             }
 
 
-def _discover_models_for_codebase(request: UploadRequest) -> None:
-    code_url = _resolve_codebase_url(request) or request.model_url
-    if not code_url or "github.com" not in code_url:
-        return
-    readme_text = _fetch_github_repo_readme(code_url)
-    if not readme_text:
-        LOGGER.debug("No README detected for code %s; skipping code discovery.", request.model_id)
+def _discover_related_models_for_code(request: UploadRequest) -> None:
+    repo_url = _resolve_codebase_url(request) or request.model_url
+    if not repo_url:
+        LOGGER.debug("Code discovery skipped for %s; no repository URL provided.", request.model_id)
         return
 
-    model_urls = _extract_model_urls_from_text(readme_text)
-    dataset_candidates = _build_dataset_candidates_from_text(readme_text)
-    if not model_urls:
-        LOGGER.debug("Code %s README did not reference any Hugging Face models.", request.model_id)
+    readme_text = _fetch_github_readme(repo_url)
+    readme_findings = _analyze_readme_entities(readme_text) if readme_text else {}
+    dataset_candidates = _build_dataset_candidates(readme_findings, request.metadata, readme_text)
+    model_candidates = _build_model_candidates(readme_text, request.metadata)
+    if not model_candidates:
+        LOGGER.debug("No model references detected for code artifact %s", request.model_id)
         return
 
     table = _get_artifacts_table()
-    code_name = request.metadata.get("name") or request.model_id
-    updated_models = 0
-    for model_url in model_urls:
-        model_entry = _scan_artifact_by_url(table, "model", model_url)
+
+    dataset_entry = None
+    if dataset_candidates:
+        dataset_names = [
+            candidate.get("name") for candidate in dataset_candidates if candidate.get("name")
+        ]
+        dataset_urls = [
+            candidate.get("url") for candidate in dataset_candidates if candidate.get("url")
+        ]
+        dataset_entry = _lookup_artifact_entry("dataset", names=dataset_names, urls=dataset_urls)
+        if dataset_entry:
+            LOGGER.info(
+                "Autodiscovered dataset %s while processing code %s",
+                dataset_entry.get("name") or dataset_entry.get("model_id"),
+                request.model_id,
+            )
+
+    for candidate in model_candidates:
+        names = [candidate.get("name"), _infer_name_from_url(candidate.get("url") or "")]
+        urls = [candidate.get("url")]
+        model_entry = _lookup_artifact_entry("model", names=names, urls=urls)
         if not model_entry:
             continue
-        updated = False
-        code_block = model_entry.get("codebase") or {}
-        if not code_block.get("url"):
-            code_block["url"] = code_url
-            code_block.setdefault("name", code_name)
-            model_entry["codebase"] = code_block
-            updated = True
+        updated = _apply_code_discovery_to_model(model_entry, request, dataset_entry)
+        if not updated:
+            LOGGER.debug(
+                "Model %s already contains code information from %s",
+                model_entry.get("model_id"),
+                request.model_id,
+            )
+            return
+        try:
+            _put_item(table, updated)
+        except ClientError as exc:
+            LOGGER.warning(
+                "Failed to update model %s after code discovery: %s",
+                model_entry.get("model_id"),
+                exc,
+            )
+            return
 
-        if dataset_candidates:
-            current_dataset = model_entry.get("dataset") or {}
-            if not current_dataset.get("url"):
-                dataset_entry = _resolve_dataset_candidate(table, dataset_candidates)
-                if dataset_entry:
-                    dataset_url = dataset_entry.get("model_url") or dataset_entry.get("dataset", {}).get("url")
-                    dataset_name = dataset_entry.get("name") or dataset_entry.get("metadata", {}).get("name")
-                    resolved = {}
-                    if dataset_url:
-                        resolved["url"] = dataset_url
-                    if dataset_name:
-                        resolved["name"] = dataset_name
-                    if resolved:
-                        model_entry["dataset"] = resolved
-                        updated = True
-                else:
-                    candidate = dataset_candidates[0]
-                    pending = model_entry.get("pending_dependencies") or {}
-                    pending["dataset"] = {
-                        "name": candidate.get("name"),
-                        "url": candidate.get("url"),
-                    }
-                    model_entry["pending_dependencies"] = pending
-                    updated = True
+        scoring_urls = _collect_scoring_urls(updated)
+        if scoring_urls:
+            queued = _enqueue_scoring_job(updated["model_id"], scoring_urls)
+            LOGGER.info(
+                "Queued scoring job for %s after linking code artifact %s (queued=%s)",
+                updated.get("model_id"),
+                request.model_id,
+                queued,
+            )
+        else:
+            LOGGER.debug(
+                "Model %s not ready for scoring after code discovery",
+                updated.get("model_id"),
+            )
+        return
 
-        if updated:
-            model_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
-            try:
-                _put_item(table, model_entry)
-                updated_models += 1
-            except Exception as exc:
-                LOGGER.warning(
-                    "Failed to update model %s with code reference %s: %s",
-                    model_entry.get("model_id"),
-                    request.model_id,
-                    exc,
-                )
+    LOGGER.debug("Unable to match any discovered model to registry entries for code %s", request.model_id)
 
-    if updated_models:
-        LOGGER.info("Linked codebase %s to %s model(s).", request.model_id, updated_models)
+
+def _fetch_github_readme(code_url: Optional[str]) -> Optional[str]:
+    if not code_url:
+        return None
+    owner, repo = _extract_github_repo_segments(code_url)
+    if not owner or not repo:
+        return None
+    for candidate in _candidate_github_readme_urls(owner, repo):
+        text = _safe_http_get(candidate)
+        if text:
+            return text
+    return None
+
+
+def _extract_github_repo_segments(url: str) -> Tuple[Optional[str], Optional[str]]:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None, None
+    if "github.com" not in (parsed.netloc or "").lower():
+        return None, None
+    parts = [segment for segment in parsed.path.strip("/").split("/") if segment]
+    if len(parts) < 2:
+        return None, None
+    owner, repo = parts[0], parts[1]
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return owner, repo
+
+
+def _candidate_github_readme_urls(owner: str, repo: str) -> List[str]:
+    base = f"https://raw.githubusercontent.com/{owner}/{repo}"
+    return [
+        f"{base}/main/README.md",
+        f"{base}/master/README.md",
+    ]
 
 
 def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
@@ -1327,42 +1364,6 @@ def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
         if text:
             return text
     return None
-
-
-def _fetch_github_repo_readme(repo_url: Optional[str]) -> Optional[str]:
-    if not repo_url:
-        return None
-    owner, repo, branch = _extract_github_repo_segments(repo_url)
-    if not owner or not repo:
-        return None
-    branches = [branch, "main", "master"]
-    filenames = ["README.md", "README.MD", "Readme.md"]
-    for candidate_branch in [b for b in branches if b]:
-        for filename in filenames:
-            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{candidate_branch}/{filename}"
-            text = _safe_http_get(raw_url)
-            if text:
-                return text
-    return None
-
-
-def _extract_github_repo_segments(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return None, None, None
-    if "github.com" not in (parsed.netloc or "").lower():
-        return None, None, None
-    segments = [segment for segment in parsed.path.split("/") if segment]
-    if len(segments) < 2:
-        return None, None, None
-    owner, repo = segments[0], segments[1]
-    branch = None
-    if repo.endswith(".git"):
-        repo = repo[:-4]
-    if len(segments) >= 4 and segments[2] == "tree":
-        branch = segments[3]
-    return owner, repo, branch
 
 
 def _extract_hf_repo_segments(url: str) -> Tuple[Optional[str], Optional[str]]:
@@ -1469,51 +1470,6 @@ def _heuristic_related_entities(text: str) -> Dict[str, Optional[str]]:
     }
 
 
-def _extract_model_urls_from_text(text: Optional[str]) -> List[str]:
-    if not text:
-        return []
-    matches = HUGGINGFACE_MODEL_URL_PATTERN.findall(text)
-    unique: List[str] = []
-    seen = set()
-    for match in matches:
-        normalized = match.rstrip("/").lower()
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        unique.append(match.rstrip("/"))
-    return unique
-
-
-def _build_dataset_candidates_from_text(text: Optional[str]) -> List[Dict[str, Optional[str]]]:
-    if not text:
-        return []
-    candidates: List[Dict[str, Optional[str]]] = []
-    for url in HUGGINGFACE_DATASET_PATTERN.findall(text):
-        candidate = _canonical_dataset_candidate(None, url)
-        if candidate:
-            candidates.append(candidate)
-    for alias in _extract_dataset_mentions_from_text(text):
-        candidate = _canonical_dataset_candidate(alias, None)
-        if candidate:
-            candidates.append(candidate)
-    return _dedupe_candidates(candidates)
-
-
-def _resolve_dataset_candidate(
-    table,
-    candidates: List[Dict[str, Optional[str]]],
-) -> Optional[Dict[str, Any]]:
-    for candidate in candidates:
-        url = candidate.get("url")
-        name = candidate.get("name")
-        entry = None
-        if url:
-            entry = _scan_artifact_by_url(table, "dataset", url)
-        if not entry and name:
-            entry = _query_artifact_by_name(table, "dataset", name)
-        if entry:
-            return entry
-    return None
 
 
 def _fetch_hf_model_metadata(model_url: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -1733,6 +1689,163 @@ def _build_code_candidates(
         if link_candidate:
             candidates.append(link_candidate)
     return _dedupe_candidates(candidates)
+
+
+def _build_model_candidates(
+    readme_text: Optional[str],
+    metadata: Optional[Dict[str, Any]],
+) -> List[Dict[str, Optional[str]]]:
+    candidates: List[Dict[str, Optional[str]]] = []
+    candidates.extend(_extract_model_candidates_from_text(readme_text))
+    candidates.extend(_extract_model_candidates_from_metadata(metadata or {}))
+    return _dedupe_candidates(candidates)
+
+
+def _extract_model_candidates_from_text(text: Optional[str]) -> List[Dict[str, Optional[str]]]:
+    if not text:
+        return []
+    matches: List[Dict[str, Optional[str]]] = []
+    for owner, repo in HUGGINGFACE_REPO_PATTERN.findall(text):
+        if owner.lower() in {"datasets", "spaces"}:
+            continue
+        slug = f"{owner}/{repo}"
+        candidate = _canonical_model_candidate(slug, f"https://huggingface.co/{slug}")
+        if candidate:
+            matches.append(candidate)
+    return matches
+
+
+def _extract_model_candidates_from_metadata(metadata: Dict[str, Any]) -> List[Dict[str, Optional[str]]]:
+    if not metadata:
+        return []
+    candidates: List[Dict[str, Optional[str]]] = []
+    card = metadata.get("cardData") or metadata.get("card_data") or {}
+    config = metadata.get("config") or {}
+    sections = [metadata, card, config]
+    fields = (
+        "model",
+        "models",
+        "model_id",
+        "modelId",
+        "modelIds",
+        "model_url",
+        "modelUrl",
+        "huggingface_model",
+        "huggingface_models",
+    )
+    for section in sections:
+        for field in fields:
+            value = section.get(field)
+            if not value:
+                continue
+            for entry in _ensure_list(value):
+                is_url_field = "url" in field.lower()
+                candidate = _canonical_model_candidate(None if is_url_field else entry, entry if is_url_field else None)
+                if candidate:
+                    candidates.append(candidate)
+    tags = _ensure_list(card.get("tags")) + _ensure_list(metadata.get("tags"))
+    for tag in tags:
+        candidate = _canonical_model_candidate(tag, None)
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def _canonical_model_candidate(
+    name: Optional[str],
+    url: Optional[str],
+) -> Optional[Dict[str, Optional[str]]]:
+    candidate_name = (name or "").strip() or None
+    candidate_url = (url or "").strip() or None
+    if candidate_url and not _is_valid_url(candidate_url):
+        candidate_url = _build_hf_model_url(candidate_url)
+    if not candidate_url and candidate_name:
+        candidate_url = _build_hf_model_url(candidate_name)
+    if candidate_url:
+        slug = _extract_hf_slug(candidate_url)
+        if slug:
+            candidate_name = candidate_name or slug
+    if not candidate_name and not candidate_url:
+        return None
+    return {"name": candidate_name, "url": candidate_url}
+
+
+def _build_hf_model_url(slug: Optional[str]) -> Optional[str]:
+    if not slug:
+        return None
+    normalized = slug.strip().strip("/")
+    if not normalized:
+        return None
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        return normalized
+    return f"https://huggingface.co/{normalized}"
+
+
+def _extract_hf_slug(url: str) -> Optional[str]:
+    match = HUGGINGFACE_REPO_PATTERN.search(url)
+    if not match:
+        return None
+    owner, repo = match.group(1), match.group(2)
+    if owner.lower() in {"datasets", "spaces"}:
+        return None
+    return f"{owner}/{repo}"
+
+
+def _apply_code_discovery_to_model(
+    model_entry: Dict[str, Any],
+    request: UploadRequest,
+    dataset_entry: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    updated = copy.deepcopy(model_entry)
+    changed = False
+    now = datetime.now(timezone.utc).isoformat()
+    code_url = _resolve_codebase_url(request) or request.model_url
+
+    if code_url:
+        code_block = copy.deepcopy(updated.get("codebase") or {})
+        code_changed = False
+        if code_block.get("url") != code_url:
+            code_block["url"] = code_url
+            code_changed = True
+        if code_block.get("artifact_id") != request.model_id:
+            code_block["artifact_id"] = request.model_id
+            code_changed = True
+        code_name = request.metadata.get("name") or request.metadata.get("code_name")
+        if code_name and code_block.get("name") != code_name:
+            code_block["name"] = code_name
+            code_changed = True
+        if not code_block.get("name"):
+            inferred = _infer_name_from_url(code_url)
+            if inferred:
+                code_block["name"] = inferred
+        if code_changed:
+            code_block["updated_at"] = now
+            updated["codebase"] = code_block
+            changed = True
+
+    if dataset_entry:
+        dataset_block = copy.deepcopy(updated.get("dataset") or {})
+        dataset_url = dataset_entry.get("model_url") or dataset_entry.get("dataset", {}).get("url")
+        dataset_name = dataset_entry.get("name") or dataset_entry.get("metadata", {}).get("name")
+        dataset_changed = False
+        if dataset_url and dataset_block.get("url") != dataset_url:
+            dataset_block["url"] = dataset_url
+            dataset_changed = True
+        if dataset_name and dataset_block.get("name") != dataset_name:
+            dataset_block["name"] = dataset_name
+            dataset_changed = True
+        if dataset_changed:
+            dataset_block["artifact_id"] = dataset_entry.get("model_id")
+            dataset_block["updated_at"] = now
+            updated["dataset"] = dataset_block
+            changed = True
+
+    if not changed:
+        return None
+
+    updated["updated_at"] = now
+    return updated
+
 def _lookup_artifact_entry(
     artifact_type: str,
     *,
@@ -2056,10 +2169,10 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 )
         elif artifact_type == "code":
             try:
-                _discover_models_for_codebase(request)
+                _discover_related_models_for_code(request)
             except Exception as exc:
                 LOGGER.warning(
-                    "Codebase discovery failed for %s: %s",
+                    "Automatic code discovery failed for %s: %s",
                     request.model_id,
                     exc,
                 )
