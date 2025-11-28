@@ -67,6 +67,16 @@ HUGGINGFACE_DATASET_PATTERN = re.compile(
 GITHUB_REPO_PATTERN = re.compile(
     r"(https?://github\.com/[\w\-.]+/[\w\-.]+)"
 )
+KNOWN_DATASET_ALIASES = {
+    "imagenet": "ILSVRC/imagenet-1k",
+    "imagenet-1k": "ILSVRC/imagenet-1k",
+    "imagenet1k": "ILSVRC/imagenet-1k",
+    "ilsvrc/imagenet-1k": "ILSVRC/imagenet-1k",
+}
+KNOWN_CODE_REPOS = {
+    "timm": "https://github.com/huggingface/pytorch-image-models",
+    "pytorch-image-models": "https://github.com/huggingface/pytorch-image-models",
+}
 
 _S3_CLIENT: Optional[boto3.client] = None
 _SQS_CLIENT: Optional[boto3.client] = None
@@ -1159,17 +1169,22 @@ def _extract_first_url(text: str) -> Optional[str]:
 
 def _discover_related_resources_for_model(request: UploadRequest) -> None:
     readme_text = _fetch_hf_model_readme(request.model_url)
-    if not readme_text:
-        LOGGER.debug("No README detected for %s; skipping autodiscovery.", request.model_id)
+    metadata_doc = _fetch_hf_model_metadata(request.model_url)
+    readme_findings = _analyze_readme_entities(readme_text) if readme_text else {}
+    dataset_candidates = _build_dataset_candidates(readme_findings, metadata_doc, readme_text)
+    code_candidates = _build_code_candidates(readme_findings, metadata_doc, readme_text)
+    if not dataset_candidates and not code_candidates:
+        LOGGER.debug("No dependency hints detected for %s", request.model_id)
         return
 
-    # Ask Bedrock/heuristics which dataset/code the README references.
-    findings = _analyze_readme_entities(readme_text)
     pending = request.metadata.setdefault("pending_dependencies", {})
+
+    dataset_names = [candidate.get("name") for candidate in dataset_candidates if candidate.get("name")]
+    dataset_urls = [candidate.get("url") for candidate in dataset_candidates if candidate.get("url")]
     dataset_entry = _lookup_artifact_entry(
         "dataset",
-        names=[findings.get("dataset_name")],
-        urls=[findings.get("dataset_url")],
+        names=dataset_names,
+        urls=dataset_urls,
     )
     if dataset_entry:
         dataset_url = dataset_entry.get("model_url") or dataset_entry.get("dataset", {}).get("url")
@@ -1185,22 +1200,24 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             dataset_name or dataset_url,
             request.model_id,
         )
-    elif findings.get("dataset_name") or findings.get("dataset_url"):
-        # Record what we saw so we can attach the dataset later when it exists.
-        pending["dataset"] = {
-            "name": findings.get("dataset_name"),
-            "url": findings.get("dataset_url"),
-        }
+    elif dataset_candidates:
+        first = dataset_candidates[0]
+        if first.get("name") or first.get("url"):
+            pending["dataset"] = {
+                "name": first.get("name"),
+                "url": first.get("url"),
+            }
 
     code_names = [
-        findings.get("code_name"),
+        *(candidate.get("name") for candidate in code_candidates if candidate.get("name")),
         request.metadata.get("name"),
         request.model_id,
     ]
+    code_urls = [candidate.get("url") for candidate in code_candidates if candidate.get("url")]
     code_entry = _lookup_artifact_entry(
         "code",
         names=code_names,
-        urls=[findings.get("code_url")],
+        urls=code_urls,
     )
     if code_entry:
         code_url = code_entry.get("model_url") or code_entry.get("codebase", {}).get("url")
@@ -1215,12 +1232,13 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             code_name or code_url,
             request.model_id,
         )
-    elif findings.get("code_name") or findings.get("code_url"):
-        # Same deferred flow for code when nothing exists yet.
-        pending["code"] = {
-            "name": findings.get("code_name"),
-            "url": findings.get("code_url"),
-        }
+    elif code_candidates:
+        first = code_candidates[0]
+        if first.get("name") or first.get("url"):
+            pending["code"] = {
+                "name": first.get("name"),
+                "url": first.get("url"),
+            }
 
 
 def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
@@ -1340,6 +1358,223 @@ def _heuristic_related_entities(text: str) -> Dict[str, Optional[str]]:
     }
 
 
+def _fetch_hf_model_metadata(model_url: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not model_url:
+        return None
+    owner, repo = _extract_hf_repo_segments(model_url)
+    if not owner or not repo:
+        return None
+    api_url = f"https://huggingface.co/api/models/{owner}/{repo}"
+    request = urllib.request.Request(
+        api_url,
+        headers={"User-Agent": "model-manager/1.0", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        LOGGER.debug("Failed to fetch HF metadata for %s/%s: %s", owner, repo, exc)
+        return None
+
+
+def _ensure_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple, set)):
+        return [str(entry) for entry in value if entry]
+    return [str(value)]
+
+
+def _build_hf_dataset_url(slug: Optional[str]) -> Optional[str]:
+    if not slug:
+        return None
+    normalized = slug.strip().strip("/")
+    if not normalized:
+        return None
+    return f"https://huggingface.co/datasets/{normalized}"
+
+
+def _canonical_dataset_candidate(
+    name: Optional[str], url: Optional[str]
+) -> Optional[Dict[str, Optional[str]]]:
+    candidate_name = (name or "").strip() or None
+    candidate_url = (url or "").strip() or None
+    if candidate_name:
+        alias = KNOWN_DATASET_ALIASES.get(candidate_name.lower())
+        if alias:
+            candidate_url = candidate_url or _build_hf_dataset_url(alias)
+    if candidate_url and not _is_valid_url(candidate_url):
+        candidate_url = _build_hf_dataset_url(candidate_url)
+    if not candidate_url and candidate_name:
+        candidate_url = _build_hf_dataset_url(candidate_name)
+    if not candidate_name and not candidate_url:
+        return None
+    return {"name": candidate_name, "url": candidate_url}
+
+
+def _canonical_code_candidate(
+    name: Optional[str], url: Optional[str]
+) -> Optional[Dict[str, Optional[str]]]:
+    candidate_name = (name or "").strip() or None
+    candidate_url = (url or "").strip() or None
+    if candidate_name:
+        mapped = KNOWN_CODE_REPOS.get(candidate_name.lower())
+        if mapped:
+            candidate_url = candidate_url or mapped
+    if candidate_url and not _is_valid_url(candidate_url):
+        if candidate_url.startswith("github.com"):
+            candidate_url = f"https://{candidate_url}"
+        else:
+            candidate_url = f"https://github.com/{candidate_url.lstrip('/')}"
+    if not candidate_name and not candidate_url:
+        return None
+    return {"name": candidate_name, "url": candidate_url}
+
+
+def _dedupe_candidates(candidates: List[Dict[str, Optional[str]]]) -> List[Dict[str, Optional[str]]]:
+    seen = set()
+    unique: List[Dict[str, Optional[str]]] = []
+    for cand in candidates:
+        name_key = (cand.get("name") or "").strip().lower()
+        url_key = (cand.get("url") or "").strip().lower()
+        key = (name_key, url_key)
+        if not name_key and not url_key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(cand)
+    return unique
+
+
+def _extract_dataset_candidates_from_metadata(metadata: Dict[str, Any]) -> List[Dict[str, Optional[str]]]:
+    if not metadata:
+        return []
+    candidates: List[Dict[str, Optional[str]]] = []
+    card = metadata.get("cardData") or metadata.get("card_data") or {}
+    config = metadata.get("config") or {}
+    for source in (
+        card.get("datasets"),
+        card.get("dataset"),
+        metadata.get("datasets"),
+        metadata.get("dataset"),
+        config.get("datasets"),
+        config.get("dataset"),
+    ):
+        for entry in _ensure_list(source):
+            candidate = _canonical_dataset_candidate(entry, None)
+            if candidate:
+                candidates.append(candidate)
+    for field in ("dataset_url", "datasetUrl", "data_url"):
+        candidate = _canonical_dataset_candidate(None, card.get(field) or metadata.get(field))
+        if candidate:
+            candidates.append(candidate)
+    tags = _ensure_list(card.get("tags")) + _ensure_list(metadata.get("tags"))
+    for tag in tags:
+        candidate = _canonical_dataset_candidate(tag, None)
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def _extract_code_candidates_from_metadata(metadata: Dict[str, Any]) -> List[Dict[str, Optional[str]]]:
+    if not metadata:
+        return []
+    candidates: List[Dict[str, Optional[str]]] = []
+    card = metadata.get("cardData") or metadata.get("card_data") or {}
+    config = metadata.get("config") or {}
+    for source in (
+        card.get("code_repository"),
+        card.get("repo_url"),
+        card.get("github_repo"),
+        metadata.get("code_repository"),
+        metadata.get("repo_url"),
+        metadata.get("github_repo"),
+        config.get("code_repository"),
+    ):
+        for entry in _ensure_list(source):
+            candidate = _canonical_code_candidate(None, entry)
+            if candidate:
+                candidates.append(candidate)
+    library_name = card.get("library_name") or metadata.get("library_name")
+    if library_name:
+        candidate = _canonical_code_candidate(library_name, None)
+        if candidate:
+            candidates.append(candidate)
+    tags = _ensure_list(card.get("tags")) + _ensure_list(metadata.get("tags"))
+    for tag in tags:
+        candidate = _canonical_code_candidate(tag, None)
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def _extract_dataset_mentions_from_text(text: Optional[str]) -> List[str]:
+    if not text:
+        return []
+    lowered = text.lower()
+    matches = []
+    for alias in KNOWN_DATASET_ALIASES:
+        if alias in lowered:
+            matches.append(alias)
+    return matches
+
+
+def _extract_repo_links_from_text(text: Optional[str]) -> List[str]:
+    if not text:
+        return []
+    matches = GITHUB_REPO_PATTERN.findall(text)
+    unique: List[str] = []
+    seen = set()
+    for match in matches:
+        normalized = match.rstrip("/").lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(match)
+    return unique
+
+
+def _build_dataset_candidates(
+    readme_findings: Dict[str, Optional[str]],
+    metadata: Optional[Dict[str, Any]],
+    readme_text: Optional[str],
+) -> List[Dict[str, Optional[str]]]:
+    candidates: List[Dict[str, Optional[str]]] = []
+    candidate = _canonical_dataset_candidate(
+        readme_findings.get("dataset_name"),
+        readme_findings.get("dataset_url"),
+    )
+    if candidate:
+        candidates.append(candidate)
+    candidates.extend(_extract_dataset_candidates_from_metadata(metadata or {}))
+    for alias in _extract_dataset_mentions_from_text(readme_text):
+        alias_candidate = _canonical_dataset_candidate(alias, None)
+        if alias_candidate:
+            candidates.append(alias_candidate)
+    return _dedupe_candidates(candidates)
+
+
+def _build_code_candidates(
+    readme_findings: Dict[str, Optional[str]],
+    metadata: Optional[Dict[str, Any]],
+    readme_text: Optional[str],
+) -> List[Dict[str, Optional[str]]]:
+    candidates: List[Dict[str, Optional[str]]] = []
+    candidate = _canonical_code_candidate(
+        readme_findings.get("code_name"),
+        readme_findings.get("code_url"),
+    )
+    if candidate:
+        candidates.append(candidate)
+    candidates.extend(_extract_code_candidates_from_metadata(metadata or {}))
+    for repo_url in _extract_repo_links_from_text(readme_text):
+        link_candidate = _canonical_code_candidate(None, repo_url)
+        if link_candidate:
+            candidates.append(link_candidate)
+    return _dedupe_candidates(candidates)
 def _lookup_artifact_entry(
     artifact_type: str,
     *,
