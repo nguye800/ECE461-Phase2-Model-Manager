@@ -1783,6 +1783,9 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     The function returns an API Gateway compatible response. Errors are surfaced
     with a 400-level status code (client issues) or 500-level (server issues).
     """
+    print(f"[upload.lambda] Raw event: {json.dumps(event)}", flush=True)
+    print(f"[upload.lambda] Context request_id={getattr(context, 'aws_request_id', None)}", flush=True)
+
     method = _extract_http_method(event)
     path = _extract_path(event)
     print(
