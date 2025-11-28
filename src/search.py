@@ -192,14 +192,23 @@ def _handle_post_regex(event: dict) -> dict:
     except ValueError as exc:
         return _error_response(400, str(exc), log_prefix=log_prefix)
 
+    import unicodedata
+
     pattern = payload.get("regex")
     if pattern is None:
         pattern = payload.get("pattern")
+
+    if not isinstance(pattern, str) or not pattern.strip():
+        return _error_response(400, "`regex` is required for regex search", log_prefix=log_prefix)
+
+    # Normalize unicode
+    pattern = unicodedata.normalize("NFC", pattern)
+    
     if not isinstance(pattern, str) or not pattern.strip():
         return _error_response(400, "`regex` is required for regex search", log_prefix=log_prefix)
 
     try:
-        compiled = re.compile(pattern, re.IGNORECASE)
+        compiled = re.compile(pattern, re.IGNORECASE | re.DOTALL)
     except re.error as exc:
         return _error_response(400, f"Invalid regular expression: {exc}", log_prefix=log_prefix)
 
@@ -546,15 +555,12 @@ class ArtifactRepository:
         start_key: dict[str, Any] | None = None,
     ) -> tuple[list[dict], dict[str, Any] | None]:
         def predicate(item: dict) -> bool:
-            haystacks = [
-                item.get("name_lc") or "",
-                item.get("name") or "",
-                item.get("readme_text") or "",
-            ]
-            return any(
-                isinstance(text, str) and pattern.search(text)
-                for text in haystacks
-            )
+            haystacks = []
+            for field in ("name_lc", "name", "readme_text"):
+                v = item.get(field)
+                haystacks.append(v if isinstance(v, str) else "")
+            return any(pattern.search(text) for text in haystacks)
+
 
         return self._scan_models(total_needed, start_key, predicate)
 
