@@ -481,6 +481,14 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
             metadata_license = (metadata_item.get("license") or "").lower()
             if metadata_license and metadata_license != github_license:
                 compatible = False
+
+            print("[license-check] github_url =", github_url)
+            print("[license-check] github_license =", github_license)
+            print("[license-check] metadata_license =", metadata_item.get("license"))
+            print("[license-check] evaluation =", evaluation)
+            print("[license-check] hugging_face =", hugging_face)
+            print("[license-check] FINAL compatible =", compatible, flush=True)
+
             print(
                 f"[metadata.lambda] license-check result compatible={compatible}",
                 flush=True,
