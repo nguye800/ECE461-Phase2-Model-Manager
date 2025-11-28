@@ -950,7 +950,19 @@ def _serialize_item_for_dynamo(item: Dict[str, Any]) -> Dict[str, Any]:
     serialized = _DYNAMODB_SERIALIZER.serialize(prepared)
     if "M" not in serialized:
         raise UploadError("Serialized Dynamo item must be a map representation.")
-    return serialized["M"]
+    attributes = serialized["M"]
+
+    pk_field = os.getenv("RATE_PK_FIELD", "pk")
+    sk_field = os.getenv("RATE_SK_FIELD", "sk")
+    for field in (pk_field, sk_field):
+        if not field:
+            continue
+        value = prepared.get(field)
+        if value is None:
+            continue
+        attributes[field] = {"S": str(value)}
+
+    return attributes
 
 
 def _put_item(table, item: Dict[str, Any]) -> None:
