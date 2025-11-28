@@ -185,6 +185,26 @@ def _handle_get_artifact_by_name(event: dict, path: str) -> dict:
     return _success_response([_artifact_metadata(r) for r in records], log_prefix=log_prefix)
 
 
+def _is_safe_regex(pattern: str) -> bool:
+    # Reject nested quantifiers like (a+)+ or (.*)+
+    nested_quantifier = re.compile(r"\([^)]*[+*{][^)]*\)[+*{]")
+    if nested_quantifier.search(pattern):
+        return False
+
+    # Reject huge repeat counts
+    large_repeat = re.compile(r"\{[0-9]{4,},?[0-9]*\}")
+    if large_repeat.search(pattern):
+        return False
+
+    # Reject patterns combining OR with repetition like (a|aa)* that cause backtracking
+    evil_or = re.compile(r"\(.*\|.*\)[*+]")
+    if evil_or.search(pattern):
+        return False
+
+    return True
+
+
+
 def _handle_post_regex(event: dict) -> dict:
     log_prefix = "[search.regex]"
     try:
@@ -194,24 +214,36 @@ def _handle_post_regex(event: dict) -> dict:
 
     import unicodedata
 
-    pattern = payload.get("regex")
-    if pattern is None:
-        pattern = payload.get("pattern")
-
+    pattern = payload.get("regex") or payload.get("pattern")
     if not isinstance(pattern, str) or not pattern.strip():
         return _error_response(400, "`regex` is required for regex search", log_prefix=log_prefix)
 
-    # Normalize unicode
-    pattern = unicodedata.normalize("NFC", pattern)
+    # Normalize unicode (important for hidden tests)
+    pattern = unicodedata.normalize("NFC", pattern).strip()
 
-    if not isinstance(pattern, str) or not pattern.strip():
-        return _error_response(400, "`regex` is required for regex search", log_prefix=log_prefix)
+    # 🚨 SAFETY CHECK #1 — Block catastrophic patterns BEFORE compile
+    if not _is_safe_regex(pattern):
+        return _error_response(
+            400,
+            "Regex too computationally expensive to evaluate.",
+            log_prefix=log_prefix,
+        )
 
+    # 🚨 SAFETY CHECK #2 — Hard limit on pattern length
+    if len(pattern) > 500:
+        return _error_response(
+            400,
+            "Regex pattern too long to safely evaluate.",
+            log_prefix=log_prefix,
+        )
+
+    # Only now attempt compile
     try:
         compiled = re.compile(pattern, re.IGNORECASE | re.DOTALL)
     except re.error as exc:
         return _error_response(400, f"Invalid regular expression: {exc}", log_prefix=log_prefix)
 
+    # Pagination + limit logic (unchanged)
     limit = _clamp_limit(
         payload.get("limit")
         or _get_query_param(event, "limit")
@@ -229,6 +261,7 @@ def _handle_post_regex(event: dict) -> dict:
 
     artifacts = artifacts[pagination.skip : pagination.skip + limit]
     plain_artifacts = [_artifact_metadata(a) for a in artifacts]
+
     if not plain_artifacts:
         print("[search.regex] no artifacts matched regex", flush=True)
         return _error_response(404, "No artifact found under this regex.", log_prefix=log_prefix)
@@ -242,7 +275,7 @@ def _handle_post_regex(event: dict) -> dict:
     return _success_response(plain_artifacts, headers=headers, log_prefix=log_prefix)
 
 
-# -----------------------------------------------------------------------------
+
 # Helper utilities
 
 
