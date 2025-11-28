@@ -53,6 +53,7 @@ OPENAPI_METRIC_FIELDS: Tuple[str, ...] = (
     "code_quality",
     "reproducibility",
     "reviewedness",
+    "tree_score",
 )
 
 
