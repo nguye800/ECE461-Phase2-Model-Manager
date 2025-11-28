@@ -40,13 +40,15 @@ class TestSearchLambdaDynamo(unittest.TestCase):
             AttributeDefinitions=[
                 {"AttributeName": "pk", "AttributeType": "S"},
                 {"AttributeName": "sk", "AttributeType": "S"},
-                {"AttributeName": "name_lc", "AttributeType": "S"},
+                {"AttributeName": "type", "AttributeType": "S"},
+                {"AttributeName": "name", "AttributeType": "S"},
             ],
             GlobalSecondaryIndexes=[
                 {
-                    "IndexName": "NameIndex",
+                    "IndexName": "GSI_ALPHABET_LISTING",
                     "KeySchema": [
-                        {"AttributeName": "name_lc", "KeyType": "HASH"},
+                        {"AttributeName": "type", "KeyType": "HASH"},
+                        {"AttributeName": "name", "KeyType": "RANGE"},
                     ],
                     "Projection": {"ProjectionType": "ALL"},
                     "ProvisionedThroughput": {
@@ -427,7 +429,7 @@ class TestSearchLambdaDynamo(unittest.TestCase):
         event = self._event(
             "GET",
             "/artifact/byName",
-            path_params={"name": "gammamodel"},
+            path_params={"name": "GammaModel"},
         )
         response = search.handle_search(event, None)
         body = self._parse_body(response)
@@ -444,6 +446,15 @@ class TestSearchLambdaDynamo(unittest.TestCase):
 
     def test_get_artifact_by_name_not_found(self):
         event = self._event("GET", "/artifact/byName/Unknown")
+        response = search.handle_search(event, None)
+        self.assertEqual(response["statusCode"], 404)
+
+    def test_get_artifact_by_name_case_mismatch_not_found(self):
+        event = self._event(
+            "GET",
+            "/artifact/byName",
+            path_params={"name": "gammamodel"},
+        )
         response = search.handle_search(event, None)
         self.assertEqual(response["statusCode"], 404)
 

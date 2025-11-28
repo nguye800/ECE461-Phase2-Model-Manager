@@ -8,8 +8,8 @@ Supported routes (API Gateway compatible):
         results are available.
 
     GET /artifact/byName/{name}
-        Returns every artifact that matches the provided name (case-insensitive)
-        using the NameIndex global secondary index.
+        Returns every artifact that exactly matches the provided name (case-sensitive)
+        using the registry's GSI_ALPHABET_LISTING index.
 
     POST /artifact/byRegEx
         Performs a regex match over canonical names (`name_lc`) and README text.
@@ -568,19 +568,14 @@ class ArtifactRepository:
         canonical_name = (name or "").strip()
         if not canonical_name:
             return matched
-        lower_name = canonical_name.lower()
         try:
             for artifact_type in _DDB_ARTIFACT_TYPES:
                 response = self.table.query(
                     IndexName="GSI_ALPHABET_LISTING",
                     KeyConditionExpression=Key("type").eq(artifact_type)
-                    & Key("name_lc").eq(lower_name),
+                    & Key("name").eq(canonical_name),
                 )
-                items = response.get("Items", [])
-                for item in items:
-                    stored_name = item.get("name")
-                    if isinstance(stored_name, str) and stored_name == canonical_name:
-                        matched.append(item)
+                matched.extend(response.get("Items", []))
         except Exception as exc:
             raise RepositoryError(str(exc)) from exc
 
