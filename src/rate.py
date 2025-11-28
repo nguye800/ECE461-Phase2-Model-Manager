@@ -142,6 +142,7 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
         logger.debug("Skipping already-scored model %s to avoid cycles", model_id)
         return {}
     visited.add(model_id)
+    print(f"[rate.score] Starting scoring workflow for model {model_id}", flush=True)
 
     table = _get_table()
     item: Optional[Dict[str, Any]] = None
@@ -152,10 +153,32 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
         model_urls = _build_model_urls(item)
 
         active_specs, skipped_reasons = _filter_specs_by_urls(model_urls, specs)
+        if skipped_reasons:
+            print(
+                f"[rate.score] Model {model_id} missing resources: {skipped_reasons}",
+                flush=True,
+            )
         active_specs, download_skips, model_paths = _ensure_local_resources(
             model_urls, active_specs, config
         )
         skipped_reasons.update(download_skips)
+        if download_skips:
+            print(
+                f"[rate.score] Model {model_id} download issues: {download_skips}",
+                flush=True,
+            )
+
+        if active_specs:
+            print(
+                "[rate.score] Model {model_id} executing metrics: "
+                + ", ".join(sorted(spec.name for spec in active_specs)),
+                flush=True,
+            )
+        else:
+            print(
+                f"[rate.score] Model {model_id} has no runnable metrics after filtering.",
+                flush=True,
+            )
 
         analyzer_output = None
         executed_metrics: Dict[str, BaseMetric] = {}
@@ -288,6 +311,12 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("Unexpected error while scoring base model %s: %s", base_id, exc)
 
+        print(
+            f"[rate.score] Completed scoring for model {model_id}. "
+            f"net_score={net_score:.3f} coverage={coverage:.2f} status={status}",
+            flush=True,
+        )
+        print(f"[rate.score] Metric breakdown for {model_id}: {breakdown}", flush=True)
         return _build_openapi_response(
             item=record,
             model_id=model_id,
@@ -299,11 +328,16 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
     except RateException as exc:
         if item is not None:
             _record_failure(table, item, exc.message)
+        print(
+            f"[rate.score] RateException while scoring {model_id}: {exc.message}",
+            flush=True,
+        )
         raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Rating failed for %s", model_id)
         if item is not None:
             _record_failure(table, item, str(exc))
+        print(f"[rate.score] Unexpected error while scoring {model_id}: {exc}", flush=True)
         raise
 
 

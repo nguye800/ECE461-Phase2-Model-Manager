@@ -35,6 +35,7 @@ from boto3.dynamodb.conditions import Attr, Key
 try:  # pragma: no cover - optional dependency loaded at runtime
     import regex as _timeout_regex
 except ImportError:  # pragma: no cover - fallback for local tooling
+    print("regex could not be imported")
     _timeout_regex = None
 
 _DDB_ARTIFACT_TYPES = ["MODEL", "DATASET", "CODE"]
@@ -80,6 +81,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
     AWS Lambda entry point. Delegates to `handle_search` for backwards
     compatibility with other modules in this repo.
     """
+
     method = (event.get("requestContext", {}).get("http", {}) or {}).get("method") or event.get("httpMethod")
     path = event.get("rawPath") or event.get("path")
     print(
