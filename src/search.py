@@ -34,10 +34,18 @@ from boto3.dynamodb.conditions import Attr, Key
 
 try:
     import regex as _timeout_regex
-    _REGEX_TIMEOUT_EXCEPTION_TYPE = getattr(_timeout_regex, "TimeoutError", TimeoutError)
 except ImportError:
     _timeout_regex = None
-    _REGEX_TIMEOUT_EXCEPTION_TYPE = TimeoutError
+
+if _timeout_regex is not None:
+    _REGEX_ENGINE = _timeout_regex
+    _REGEX_COMPILE_ERRORS = (re.error, _timeout_regex.error)
+    _REGEX_TIMEOUT_EXCEPTION_TYPE = getattr(_timeout_regex, "TimeoutError", TimeoutError)
+else:
+    _REGEX_ENGINE = re
+    _REGEX_COMPILE_ERRORS = (re.error,)
+    _REGEX_TIMEOUT_EXCEPTION_TYPE = TimeoutError  # or None if you want to disable timeouts
+
 
 _DDB_ARTIFACT_TYPES = ["MODEL", "DATASET", "CODE"]
 
@@ -49,19 +57,6 @@ MAX_LIMIT = 100
 SCAN_BATCH_SIZE = 50
 REGEX_TIMEOUT_SECONDS = float(os.environ.get("REGEX_TIMEOUT_SECONDS", "0.1"))
 MAX_REGEX_PATTERN_LENGTH = int(os.environ.get("MAX_REGEX_PATTERN_LENGTH", "512"))
-
-if _timeout_regex is not None:  # pragma: no cover - optional dependency path
-    _REGEX_ENGINE = _timeout_regex
-    _REGEX_COMPILE_ERRORS: tuple[type[Exception], ...] = (
-        re.error,
-        _timeout_regex.error,
-    )
-    _REGEX_TIMEOUT_EXCEPTION_TYPE: type[Exception] | None = _timeout_regex.TimeoutError
-else:  # pragma: no cover - fallback path
-    _REGEX_ENGINE = re
-    _REGEX_COMPILE_ERRORS = (re.error,)
-    _REGEX_TIMEOUT_EXCEPTION_TYPE = None
-
 
 class RepositoryError(RuntimeError):
     """Raised when the backing artifact repository cannot be queried."""
