@@ -274,6 +274,7 @@ class TreeScoreMetric(BaseMetric):
         if not parents:
             # Do not penalize models without detected parents
             print("[TreeScore] No parents detected; returning neutral score 1.0")  # pragma: no cover
+            self._set_debug_details("No parent models detected; neutral lineage score")
             return 1.0
 
         # Build a lightweight config for inner evaluations
@@ -390,10 +391,14 @@ class TreeScoreMetric(BaseMetric):
                 continue
 
         if not scores:
+            self._set_debug_details("Unable to evaluate any parent models")
             return 0.0
 
         avg = sum(scores) / len(scores)
         print(f"[TreeScore] Aggregated average across {len(scores)} parents: {avg}")
+        self._set_debug_details(
+            f"parents_scored={len(scores)} average_parent_score={avg:.3f}"
+        )
         return avg
 
 

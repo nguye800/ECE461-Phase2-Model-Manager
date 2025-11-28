@@ -102,23 +102,38 @@ class PerformanceClaimsMetric(BaseMetric):
         try:
             data = json.loads(combined)
             score = float(data.get("score"))
-            return max(0.0, min(1.0, score))
+            explanation = data.get("explanation") or "model output"
+            score = max(0.0, min(1.0, score))
+            self._set_debug_details(f"Bedrock evaluation: {explanation}")
+            return score
         except (ValueError, json.JSONDecodeError, TypeError):
             matches = re.findall(r"0?\.\d+", combined)
             if matches:
                 score = float(matches[-1])
-                return max(0.0, min(1.0, score))
+                score = max(0.0, min(1.0, score))
+                self._set_debug_details(
+                    "Bedrock returned unstructured text; last numeric token used"
+                )
+                return score
         return None
 
     def _heuristic_score(self, readme: str) -> float:
         # Fallback heuristic: count evidence signals
         score = 0.0
+        signals: list[str] = []
         if "benchmark" in readme or "leaderboard" in readme:
             score += 0.4
+            signals.append("mentions benchmark/leaderboard")
         if re.search(r"\d+\.\d+\s*%", readme):
             score += 0.3
+            signals.append("contains numeric percentage")
         if "paper" in readme or "arxiv" in readme or "reference" in readme:
             score += 0.2
+            signals.append("references papers")
         if "compared to" in readme or "vs." in readme:
             score += 0.1
-        return max(0.0, min(1.0, score))
+            signals.append("mentions comparisons")
+        score = max(0.0, min(1.0, score))
+        details = ", ".join(signals) if signals else "no evidence signals found"
+        self._set_debug_details(f"Heuristic evidence: {details}")
+        return score

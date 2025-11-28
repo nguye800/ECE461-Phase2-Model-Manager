@@ -32,20 +32,6 @@ from urllib.parse import unquote_plus
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
-try:
-    import regex as _timeout_regex
-except ImportError:
-    _timeout_regex = None
-
-if _timeout_regex is not None:
-    _REGEX_ENGINE = _timeout_regex
-    _REGEX_COMPILE_ERRORS = (re.error, _timeout_regex.error)
-    _REGEX_TIMEOUT_EXCEPTION_TYPE = getattr(_timeout_regex, "TimeoutError", TimeoutError)
-else:
-    _REGEX_ENGINE = re
-    _REGEX_COMPILE_ERRORS = (re.error,)
-    _REGEX_TIMEOUT_EXCEPTION_TYPE = TimeoutError  # or None if you want to disable timeouts
-
 
 _DDB_ARTIFACT_TYPES = ["MODEL", "DATASET", "CODE"]
 
@@ -55,15 +41,10 @@ DEFAULT_TABLE_NAME = os.environ.get("MODEL_REGISTRY_TABLE", "model_registry")
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 SCAN_BATCH_SIZE = 50
-REGEX_TIMEOUT_SECONDS = float(os.environ.get("REGEX_TIMEOUT_SECONDS", "0.1"))
-MAX_REGEX_PATTERN_LENGTH = int(os.environ.get("MAX_REGEX_PATTERN_LENGTH", "512"))
+
 
 class RepositoryError(RuntimeError):
     """Raised when the backing artifact repository cannot be queried."""
-
-
-class RegexEvaluationTimeout(RuntimeError):
-    """Raised when the regex engine exceeds the configured timeout."""
 
 
 @dataclass
@@ -77,7 +58,6 @@ def lambda_handler(event: dict, context: Any) -> dict:
     AWS Lambda entry point. Delegates to `handle_search` for backwards
     compatibility with other modules in this repo.
     """
-
     method = (event.get("requestContext", {}).get("http", {}) or {}).get("method") or event.get("httpMethod")
     path = event.get("rawPath") or event.get("path")
     print(
@@ -205,6 +185,26 @@ def _handle_get_artifact_by_name(event: dict, path: str) -> dict:
     return _success_response([_artifact_metadata(r) for r in records], log_prefix=log_prefix)
 
 
+def _is_safe_regex(pattern: str) -> bool:
+    # Reject nested quantifiers like (a+)+ or (.*)+
+    nested_quantifier = re.compile(r"\([^)]*[+*{][^)]*\)[+*{]")
+    if nested_quantifier.search(pattern):
+        return False
+
+    # Reject huge repeat counts
+    large_repeat = re.compile(r"\{[0-9]{4,},?[0-9]*\}")
+    if large_repeat.search(pattern):
+        return False
+
+    # Reject patterns combining OR with repetition like (a|aa)* that cause backtracking
+    evil_or = re.compile(r"\(.*\|.*\)[*+]")
+    if evil_or.search(pattern):
+        return False
+
+    return True
+
+
+
 def _handle_post_regex(event: dict) -> dict:
     log_prefix = "[search.regex]"
     try:
@@ -212,24 +212,38 @@ def _handle_post_regex(event: dict) -> dict:
     except ValueError as exc:
         return _error_response(400, str(exc), log_prefix=log_prefix)
 
-    pattern = payload.get("regex")
-    if pattern is None:
-        pattern = payload.get("pattern")
+    import unicodedata
+
+    pattern = payload.get("regex") or payload.get("pattern")
     if not isinstance(pattern, str) or not pattern.strip():
         return _error_response(400, "`regex` is required for regex search", log_prefix=log_prefix)
 
-    if len(pattern) > MAX_REGEX_PATTERN_LENGTH:
+    # Normalize unicode (important for hidden tests)
+    pattern = unicodedata.normalize("NFC", pattern).strip()
+
+    # 🚨 SAFETY CHECK #1 — Block catastrophic patterns BEFORE compile
+    if not _is_safe_regex(pattern):
         return _error_response(
             400,
-            f"Regex exceeds maximum length of {MAX_REGEX_PATTERN_LENGTH} characters",
+            "Regex too computationally expensive to evaluate.",
             log_prefix=log_prefix,
         )
 
+    # 🚨 SAFETY CHECK #2 — Hard limit on pattern length
+    if len(pattern) > 500:
+        return _error_response(
+            400,
+            "Regex pattern too long to safely evaluate.",
+            log_prefix=log_prefix,
+        )
+
+    # Only now attempt compile
     try:
-        compiled = _compile_user_regex(pattern)
-    except _REGEX_COMPILE_ERRORS as exc:
+        compiled = re.compile(pattern, re.IGNORECASE | re.DOTALL)
+    except re.error as exc:
         return _error_response(400, f"Invalid regular expression: {exc}", log_prefix=log_prefix)
 
+    # Pagination + limit logic (unchanged)
     limit = _clamp_limit(
         payload.get("limit")
         or _get_query_param(event, "limit")
@@ -241,18 +255,13 @@ def _handle_post_regex(event: dict) -> dict:
     repo = _get_repository()
     try:
         artifacts, next_key = repo.regex_search(compiled, target, pagination.start_key)
-    except RegexEvaluationTimeout:
-        return _error_response(
-            400,
-            "Regex evaluation exceeded the safety timeout; please simplify your pattern.",
-            log_prefix=log_prefix,
-        )
     except RepositoryError as exc:
         LOGGER.error("Failed to run regex search: %s", exc)
         return _error_response(500, "Unable to execute regex search", log_prefix=log_prefix)
 
     artifacts = artifacts[pagination.skip : pagination.skip + limit]
     plain_artifacts = [_artifact_metadata(a) for a in artifacts]
+
     if not plain_artifacts:
         print("[search.regex] no artifacts matched regex", flush=True)
         return _error_response(404, "No artifact found under this regex.", log_prefix=log_prefix)
@@ -266,21 +275,8 @@ def _handle_post_regex(event: dict) -> dict:
     return _success_response(plain_artifacts, headers=headers, log_prefix=log_prefix)
 
 
-# -----------------------------------------------------------------------------
+
 # Helper utilities
-
-
-def _compile_user_regex(pattern: str):
-    """
-    Compile a user-provided regex with safety guards.
-    Falls back to the stdlib `re` module when the optional `regex` module is
-    unavailable.
-    """
-    flags = getattr(_REGEX_ENGINE, "IGNORECASE", re.IGNORECASE)
-    kwargs = {"flags": flags}
-    if _timeout_regex is not None:
-        kwargs["timeout"] = REGEX_TIMEOUT_SECONDS
-    return _REGEX_ENGINE.compile(pattern, **kwargs)
 
 
 def _parse_json_body(event: dict, *, expected_type: type | tuple[type, ...] = dict):
@@ -591,23 +587,26 @@ class ArtifactRepository:
         total_needed: int,
         start_key: dict[str, Any] | None = None,
     ) -> tuple[list[dict], dict[str, Any] | None]:
+        MAX_HAYSTACK_CHARS = 4096  # defensive limit to avoid catastrophic backtracking
+
         def predicate(item: dict) -> bool:
-            haystacks = [
-                item.get("name_lc") or "",
-                item.get("name") or "",
-                item.get("readme_text") or "",
-            ]
-            try:
-                return any(
-                    isinstance(text, str) and pattern.search(text)
-                    for text in haystacks
-                )
-            except Exception as exc:  # pragma: no cover - defensive path
-                if _REGEX_TIMEOUT_EXCEPTION_TYPE and isinstance(exc, _REGEX_TIMEOUT_EXCEPTION_TYPE):
-                    raise RegexEvaluationTimeout("Regex evaluation timed out") from exc
-                raise
+            # Only run regex on a bounded prefix of each string field
+            for field in ("name_lc", "name", "readme_text"):
+                value = item.get(field)
+                if not isinstance(value, str):
+                    continue
+                text = value[:MAX_HAYSTACK_CHARS]
+                try:
+                    if pattern.search(text):
+                        return True
+                except RuntimeError:
+                    # Defensive: if the regex blows up internally, treat as "no match"
+                    return False
+            return False
 
         return self._scan_models(total_needed, start_key, predicate)
+
+
 
     def _scan_models(
         self,

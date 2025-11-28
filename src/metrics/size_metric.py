@@ -115,10 +115,15 @@ class SizeMetric(BaseMetric):
                    - 0.0: Model doesn't fit on storage
                    - 0.1-1.0: Model fits, score based on remaining memory percentage
         """
-        return {
+        scores = {
             platform: self.calculate_device_score(specs)
             for platform, specs in DEVICE_SPECS.items()
         }
+        self._set_debug_details(
+            f"storage_mb={self.storage_size_mb:.1f} memory_mb={self.memory_size_mb:.1f} "
+            f"param_source={self.param_source or 'config'} scores={scores}"
+        )
+        return scores
 
     def _fetch_model_info(self) -> dict:
         """

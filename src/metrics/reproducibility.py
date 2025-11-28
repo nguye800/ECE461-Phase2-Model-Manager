@@ -270,23 +270,37 @@ class ReproducibilityMetric(BaseMetric):
             self.setup_resources()
 
         if not self.response["has_model_card"]:
+            self._set_debug_details("Model card missing")
             return 0.0  # No model card
         
         if self.response["code_snippets_found"] == 0:
+            self._set_debug_details("Model card contains no runnable code snippets")
             return 0.0  # No code snippets found
         
         # Check execution results
         execution_results = self.response["execution_results"]
+        total_snippets = len(execution_results)
+        runs_clean = sum(1 for r in execution_results if r["runs_without_changes"])
+        runs_with_debug = sum(1 for r in execution_results if r["runs_with_debugging"])
         
         # If any snippet runs without changes, score is 1.0
         if any(r["runs_without_changes"] for r in execution_results):
+            self._set_debug_details(
+                f"{runs_clean}/{total_snippets} snippets ran without modification"
+            )
             return 1.0
         
         # If any snippet runs with debugging, score is 0.5
         if any(r["runs_with_debugging"] for r in execution_results):
+            self._set_debug_details(
+                f"{runs_with_debug}/{total_snippets} snippets ran after debugging"
+            )
             return 0.5
         
         # Nothing runs
+        self._set_debug_details(
+            f"None of the {total_snippets} snippets executed successfully"
+        )
         return 0.0
 
 

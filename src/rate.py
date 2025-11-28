@@ -170,7 +170,7 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
 
         if active_specs:
             print(
-                "[rate.score] Model {model_id} executing metrics: "
+                f"[rate.score] Model {model_id} executing metrics: "
                 + ", ".join(sorted(spec.name for spec in active_specs)),
                 flush=True,
             )
@@ -202,6 +202,7 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
         net_score = analyzer_output.score if analyzer_output else 0.0
 
         breakdown: Dict[str, Dict[str, Any]] = {}
+        failed_metrics: list[str] = []
         for spec in specs:
             metric_data = executed_metrics.get(spec.name)
             if metric_data:
@@ -211,8 +212,20 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
                     "available": True,
                     "latency_ms": int(metric_data.runtime * 1000),
                 }
-                if details:
-                    entry["details"] = details
+                metric_failed = getattr(metric_data, "failed", False)
+                debug_details = metric_data.explain_score()
+                if metric_failed:
+                    entry["available"] = False
+                    entry["failed"] = True
+                    entry["reason"] = "metric_failed"
+                    if debug_details:
+                        entry["details"] = debug_details
+                    failed_metrics.append(spec.name)
+                else:
+                    if details:
+                        entry["details"] = details
+                    elif debug_details:
+                        entry["details"] = debug_details
                 breakdown[spec.name] = entry
             else:
                 entry = {
@@ -241,6 +254,8 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
             "evidence_coverage": coverage,
             "breakdown": breakdown,
         }
+        if failed_metrics:
+            metrics_payload["failed_metrics"] = failed_metrics
 
         existing_scoring = item.get("scoring", {})
         score_version = os.getenv(
@@ -257,6 +272,8 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
         }
         if scorer_build:
             scoring_payload["scorer_build"] = scorer_build
+        if failed_metrics:
+            scoring_payload["has_metric_failures"] = True
 
         eligibility_payload: Dict[str, Any] = {
             "minimum_evidence_met": coverage_met,
@@ -392,7 +409,7 @@ def _build_metric_specs() -> List[MetricSpec]:
             required_urls={"model"},
         ),
         MetricSpec(
-            name="dataset_and_code_score",
+            name="dataset_and_code",
             factory=DatasetAndCodeScoreMetric,
             priority=2,
             required_urls={"model"},

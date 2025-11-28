@@ -67,20 +67,29 @@ class RampUpMetric(BaseMetric):
     @override
     def calculate_score(self) -> float:
         scores = []
+        explanations: list[str] = []
         model_score = self._score_text(self.model_card_text, "model card")
         if model_score is not None:
-            scores.append(model_score)
+            value, detail = model_score
+            scores.append(value)
+            explanations.append(detail)
         code_score = self._score_text(self.code_readme_text, "code repository")
         if code_score is not None:
-            scores.append(code_score)
+            value, detail = code_score
+            scores.append(value)
+            explanations.append(detail)
 
         if not scores:
+            self._set_debug_details("No documentation sources available")
             return 0.0
 
         composite = sum(scores) / len(scores)
+        self._set_debug_details("; ".join(explanations))
         return self._clamp(composite)
 
-    def _score_text(self, text: Optional[str], source_name: str) -> Optional[float]:
+    def _score_text(
+        self, text: Optional[str], source_name: str
+    ) -> Optional[tuple[float, str]]:
         if not text or not text.strip():
             return None
 
@@ -93,13 +102,15 @@ class RampUpMetric(BaseMetric):
         try:
             score = self._invoke_bedrock(prompt)
             if score is not None:
-                return self._clamp(score)
+                clamped = self._clamp(score)
+                return clamped, f"{source_name} scored via Bedrock -> {clamped:.3f}"
         except Exception as exc:
             logger.warning(
                 "RampUpMetric Bedrock scoring failed for %s: %s", source_name, exc
             )
 
-        return self._heuristic_score(excerpt)
+        heur = self._heuristic_score(excerpt)
+        return heur, f"{source_name} heuristic coverage -> {heur:.3f}"
 
     def _invoke_bedrock(self, prompt: str) -> Optional[float]:
         client = self.bedrock_client

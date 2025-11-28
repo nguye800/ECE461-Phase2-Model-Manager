@@ -23,6 +23,7 @@ class DatasetAndCodeScoreMetric(BaseMetric):
     @override
     def calculate_score(self) -> float:
         score = 0.0
+        signals: list[str] = []
 
         # Check dataset availability
         try:
@@ -30,6 +31,7 @@ class DatasetAndCodeScoreMetric(BaseMetric):
                 response = requests.head(self.url.dataset)
                 if response.status_code == 200:
                     score += 0.3
+                    signals.append("dataset_url reachable")
         except requests.RequestException:
             pass
 
@@ -39,6 +41,7 @@ class DatasetAndCodeScoreMetric(BaseMetric):
                 response = requests.head(self.url.codebase)
                 if response.status_code == 200:
                     score += 0.3
+                    signals.append("code_url reachable")
         except requests.RequestException:
             pass
 
@@ -48,6 +51,7 @@ class DatasetAndCodeScoreMetric(BaseMetric):
                 response = requests.get(self.url.dataset)
                 if "dataset description" in response.text.lower():
                     score += 0.2
+                    signals.append("dataset page has description")
         except requests.RequestException:
             pass
 
@@ -67,5 +71,12 @@ class DatasetAndCodeScoreMetric(BaseMetric):
                     if marker in readme_content:
                         doc_score += 0.2 / len(documentation_markers)
             doc_score = min(0.2, doc_score)
+            if doc_score > 0:
+                signals.append("README mentions dataset/code markers")
 
-        return min(1, score + doc_score)
+        final_score = min(1, score + doc_score)
+        details = ", ".join(signals) if signals else "no signals detected"
+        self._set_debug_details(
+            f"{details} -> base={score:.3f} doc_bonus={doc_score:.3f}"
+        )
+        return final_score

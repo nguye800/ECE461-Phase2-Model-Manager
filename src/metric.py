@@ -1,9 +1,11 @@
 import abc
-import typing
 import time
-from typing_extensions import Self
+import typing
 from itertools import starmap
+from typing_extensions import Self
+
 from sortedcontainers import SortedDict
+
 from config import *
 
 
@@ -24,6 +26,8 @@ class BaseMetric(abc.ABC):
         self.target_platform: typing.Optional[str] = None
         self.local_directory = None
         self.runtime: float = 0.0
+        self._debug_details: str | None = None
+        self.failed: bool = False
 
     def run(self) -> Self:
         """
@@ -32,16 +36,38 @@ class BaseMetric(abc.ABC):
             Self: The metric instance with updated score.
         """
         start: float = time.time()
+        self._debug_details = None
+        self.failed = False
         try:
             self.setup_resources()
             self.score = self.calculate_score()
         except Exception as e:
             self.score = 0.0
-            #print(f"{self.metric_name} === {e}")
+            self.failed = True
+            self._set_debug_details(f"exception: {e}")
 
         self.runtime = time.time() - start
+        explanation = self.explain_score()
+        if explanation:
+            self._log_score(f"score={self._format_score(self.score)} details={explanation}")
+        else:
+            self._log_score(f"score={self._format_score(self.score)}")
 
         return self
+
+    def _format_score(self, score: typing.Any) -> str:
+        if isinstance(score, float):
+            return f"{score:.3f}"
+        return str(score)
+
+    def _log_score(self, message: str) -> None:
+        print(f"[metric.{self.metric_name}] {message}", flush=True)
+
+    def _set_debug_details(self, message: str) -> None:
+        self._debug_details = message
+
+    def explain_score(self) -> str:
+        return self._debug_details or ""
 
     def set_params(self, priority: int, platform: str) -> Self:
         """

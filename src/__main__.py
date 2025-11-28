@@ -367,7 +367,7 @@ def analyze(url_file: Path):
                 },
                 0,
             ),
-            FloatMetric("dataset_and_code_score", 0.0, 0),
+            FloatMetric("dataset_and_code", 0.0, 0),
             FloatMetric("dataset_quality", 0.0, 0),
             FloatMetric("code_quality", 0.0, 0),
             FloatMetric("reproducibility", 0.0, 0),

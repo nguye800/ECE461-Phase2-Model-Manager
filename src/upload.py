@@ -569,12 +569,12 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
 
     _put_item(table, item)
     _process_dependency_resolution(artifact_type, item)
-    scoring_urls = _collect_scoring_urls(item)
-    if scoring_urls:
+    scoring_context = _gather_scoring_context(item, request)
+    if scoring_context.get("model_url"):
         LOGGER.info(
-            "Enqueuing scoring job for new %s artifact %s (all URLs present)", artifact_type, artifact_id
+            "Enqueuing scoring job for new %s artifact %s", artifact_type, artifact_id
         )
-        _enqueue_scoring_job(artifact_id, scoring_urls)
+        _enqueue_scoring_job(artifact_id, scoring_context, reason="artifact_create")
     print(
         f"[upload.spec.create] Completed creation for {artifact_type}/{artifact_id}",
         flush=True,
@@ -699,9 +699,11 @@ def _handle_spec_artifact_update(
         user=_resolve_request_user(payload),
     )
     _put_item(table, updated_item)
-    scoring_urls = _collect_scoring_urls(updated_item)
-    if scoring_urls:
-        _enqueue_scoring_job(artifact_id, scoring_urls)
+    scoring_context = _gather_scoring_context(updated_item)
+    if scoring_context.get("model_url"):
+        _enqueue_scoring_job(
+            artifact_id, scoring_context, reason="artifact_update"
+        )
     print(
         f"[upload.spec.update] Completed update for {artifact_type}/{artifact_id}",
         flush=True,
@@ -769,14 +771,9 @@ def _is_valid_url(value: Optional[str]) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def _model_ready_for_scoring(
-    model_url: Optional[str], codebase_url: Optional[str], dataset_url: Optional[str]
-) -> bool:
-    """A model is ready for scoring when URLs for model, code, and data exist."""
-    return all(_is_valid_url(url) for url in (model_url, codebase_url, dataset_url))
-
-
-def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest] = None) -> Optional[Dict[str, str]]:
+def _gather_scoring_context(
+    item: Dict[str, Any], request: Optional[UploadRequest] = None
+) -> Dict[str, Optional[str]]:
     dataset = item.get("dataset") or {}
     codebase = item.get("codebase") or {}
     model_url = item.get("model_url") or (request.model_url if request else None)
@@ -785,17 +782,16 @@ def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest]
     if request:
         codebase_url = codebase_url or _resolve_codebase_url(request)
         dataset_url = dataset_url or _resolve_dataset_url(request)
-
-    if _model_ready_for_scoring(model_url, codebase_url, dataset_url):
-        return {
-            "model_url": model_url,
-            "codebase_url": codebase_url,
-            "dataset_url": dataset_url,
-        }
-    return None
+    return {
+        "model_url": model_url,
+        "codebase_url": codebase_url,
+        "dataset_url": dataset_url,
+    }
 
 
-def _enqueue_scoring_job(model_id: str, urls: Dict[str, str]) -> bool:
+def _enqueue_scoring_job(
+    model_id: str, urls: Optional[Dict[str, Optional[str]]] = None, *, reason: Optional[str] = None
+) -> bool:
     """
     Enqueue a scoring job on SQS. Returns True when a message was queued.
     """
@@ -804,15 +800,15 @@ def _enqueue_scoring_job(model_id: str, urls: Dict[str, str]) -> bool:
         LOGGER.debug("SCORING_QUEUE_URL not set; skipping scoring enqueue.")
         return False
 
-    message_body = json.dumps(
-        {
-            "model_id": model_id,
-            "model_url": urls["model_url"],
-            "codebase_url": urls["codebase_url"],
-            "dataset_url": urls["dataset_url"],
-            "queued_at": datetime.utcnow().isoformat(),
-        }
-    )
+    payload: Dict[str, Any] = {
+        "model_id": model_id,
+        "queued_at": datetime.utcnow().isoformat(),
+    }
+    if urls:
+        payload["urls"] = urls
+    if reason:
+        payload["reason"] = reason
+    message_body = json.dumps(payload)
 
     try:
         sqs_client = _get_sqs_client()
@@ -1435,9 +1431,11 @@ def _process_dependency_resolution(artifact_type: str, artifact_record: Dict[str
                     exc,
                 )
                 continue
-            scoring_urls = _collect_scoring_urls(updated)
-            if scoring_urls:
-                _enqueue_scoring_job(updated["model_id"], scoring_urls)
+            scoring_context = _gather_scoring_context(updated)
+            if scoring_context.get("model_url"):
+                _enqueue_scoring_job(
+                    updated["model_id"], scoring_context, reason="dependency_dataset_linked"
+                )
         return
 
     if artifact_type == "code":
@@ -1520,9 +1518,11 @@ def _associate_code_with_models(artifact_record: Dict[str, Any]) -> None:
                 )
                 continue
 
-            scoring_urls = _collect_scoring_urls(updated)
-            if scoring_urls:
-                _enqueue_scoring_job(updated["model_id"], scoring_urls)
+            scoring_context = _gather_scoring_context(updated)
+            if scoring_context.get("model_url"):
+                _enqueue_scoring_job(
+                    updated["model_id"], scoring_context, reason="dependency_code_linked"
+                )
 
         last_key = response.get("LastEvaluatedKey")
         if not last_key:
@@ -1812,7 +1812,7 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         existing = _fetch_existing_item(table, key)
 
         item = _build_ddb_item(request, uploaded_artifacts, artifact_type, existing)
-        scoring_urls = _collect_scoring_urls(item, request)
+        scoring_context = _gather_scoring_context(item, request)
         try:
             _put_item(table, item)
         except ClientError as exc:
@@ -1825,8 +1825,10 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         action = "updated" if existing else "created"
 
         queued_scoring_job = False
-        if scoring_urls:
-            queued_scoring_job = _enqueue_scoring_job(request.model_id, scoring_urls)
+        if scoring_context.get("model_url"):
+            queued_scoring_job = _enqueue_scoring_job(
+                request.model_id, scoring_context, reason=f"{artifact_type}_{action}"
+            )
 
         response_body = {
             "status": "success",

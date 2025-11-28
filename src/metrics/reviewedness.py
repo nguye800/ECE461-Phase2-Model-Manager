@@ -215,10 +215,16 @@ class ReviewednessMetric(BaseMetric):
 
         total = self.response["total_additions"]
         if total == 0:
+            self._set_debug_details("No merged PR additions detected in analysis window")
             return 0.0
         
         reviewed = self.response["reviewed_additions"]
-        return float(reviewed) / float(total)
+        score = float(reviewed) / float(total)
+        self._set_debug_details(
+            f"reviewed_additions={reviewed} unreviewed={self.response['unreviewed_additions']} "
+            f"prs_with_reviews={self.response['prs_with_reviews']} total_prs={self.response['total_prs']}"
+        )
+        return score
 
 
 if __name__ == "__main__":  # pragma: no cover

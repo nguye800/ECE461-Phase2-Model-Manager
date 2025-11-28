@@ -192,9 +192,14 @@ repository(name:"%s", owner:"%s"){
         codebase_commits, codebase_score = self.parse_response()
         codebase_factor = self.calculate_bus_factor(codebase_commits, codebase_score)
         model_factor = self.calculate_bus_factor(model_commits, model_score)
-        return self.calc_weighted_sum(
+        final = self.calc_weighted_sum(
             codebase_commits, model_commits, codebase_factor, model_factor
         )
+        self._set_debug_details(
+            f"model_commits={model_commits} code_commits={codebase_commits} "
+            f"model_factor={model_factor:.3f} code_factor={codebase_factor:.3f}"
+        )
+        return final
 
     def setup_resources(self):
         load_dotenv()

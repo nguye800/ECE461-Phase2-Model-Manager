@@ -73,21 +73,7 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
 
     scoring = item.get("scoring", {})
     eligibility = item.get("eligibility", {})
-    metrics_blob = item.get("metrics")
-
-    if scoring.get("status") != "COMPLETED":
-        reason = eligibility.get("reason") or scoring.get("status") or "rating pending"
-        print(f"[rate.http] Rating pending reason={reason}", flush=True)
-        return _json_response(500, {"message": reason})
-
-    if eligibility.get("minimum_evidence_met") is False:
-        reason = eligibility.get("reason") or "insufficient evidence coverage"
-        print(f"[rate.http] Eligibility failure: {reason}", flush=True)
-        return _json_response(500, {"message": reason})
-
-    if not metrics_blob:
-        print("[rate.http] Metrics blob missing", flush=True)
-        return _json_response(500, {"message": "metrics unavailable"})
+    metrics_blob = item.get("metrics") or {}
 
     breakdown = metrics_blob.get("breakdown", {})
     net_score = float(metrics_blob.get("average", 0.0))
@@ -100,6 +86,24 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
         net_score_latency=net_score_latency,
         breakdown=breakdown,
     )
+    response_payload["scoring_status"] = scoring.get("status") or "UNKNOWN"
+    response_payload["eligibility"] = eligibility
+    if scoring.get("status") != "COMPLETED":
+        response_payload["pending_reason"] = scoring.get("status") or "rating pending"
+    if eligibility.get("minimum_evidence_met") is False:
+        response_payload["eligibility_reason"] = eligibility.get("reason") or "insufficient evidence coverage"
+
+    failed_metrics = list(metrics_blob.get("failed_metrics") or [])
+    for metric_name, entry in breakdown.items():
+        if isinstance(entry, dict) and (entry.get("failed") or entry.get("reason") == "metric_failed"):
+            if metric_name not in failed_metrics:
+                failed_metrics.append(metric_name)
+
+    if failed_metrics:
+        response_payload["failed_metrics"] = failed_metrics
+        print(f"[rate.http] Metric failures detected for {model_id}: {failed_metrics}", flush=True)
+        return _json_response(500, response_payload)
+
     print(f"[rate.http] Returning rating for model {model_id}", flush=True)
     return _json_response(200, response_payload)
 
@@ -147,9 +151,21 @@ def _extract_model_id(event: Dict[str, Any]) -> str:
     for candidate in candidates:
         if candidate:
             candidate_str = str(candidate).strip()
-            if candidate_str:
-                return candidate_str
+            if not candidate_str:
+                continue
+            if not _is_valid_model_id(candidate_str):
+                raise EnqueueException(
+                    400, "model id must be alphanumeric with dashes/underscores only"
+                )
+            return candidate_str
     raise EnqueueException(400, "missing or invalid model id")
+
+
+def _is_valid_model_id(value: str) -> bool:
+    """Allow alphanumerics plus dash/underscore to match DynamoDB key conventions."""
+    import re
+
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]+", value))
 
 
 def _json_response(status_code: int, payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -33,6 +33,7 @@ class CodeQualityMetric(BaseMetric):
     @override
     def calculate_score(self) -> float:
         if not self.file_list:
+            self._set_debug_details("no python files detected for linting")
             return 0.0
 
         pylinter.MANAGER.clear_cache()
@@ -46,6 +47,11 @@ class CodeQualityMetric(BaseMetric):
         match = re.search(r"rated at ([0-9]+\.[0-9]+)/10", output_stream.getvalue())
 
         if match is None:
+            self._set_debug_details("pylint did not return an aggregate score")
             return 0.0
 
-        return float(match.group(1)) / 10
+        raw_score = float(match.group(1)) / 10
+        self._set_debug_details(
+            f"analyzed_files={len(self.file_list)} pylint_score={float(match.group(1)):.2f}/10"
+        )
+        return raw_score
