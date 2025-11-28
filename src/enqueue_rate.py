@@ -107,6 +107,7 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
         return _json_response(200, response_payload)
 
     print(f"[rate.http] Returning rating for model {model_id}", flush=True)
+    print(f"[rate.http] Payload: {response_payload}", flush=True)
     return _json_response(200, response_payload)
 
 

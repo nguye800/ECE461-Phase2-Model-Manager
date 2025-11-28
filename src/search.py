@@ -675,9 +675,12 @@ def _matches_single_query(item: dict, query: dict) -> bool:
 
     name_filter = str(query.get("name") or "*").strip()
     if name_filter not in ("", "*"):
-        needle = name_filter.lower()
-        haystack = (item.get("name_lc") or "").lower()
-        if needle not in haystack:
+        candidate_name = (
+            item.get("name")
+            or (item.get("metadata") or {}).get("name")
+            or ""
+        )
+        if candidate_name != name_filter:
             return False
 
     filters = query.get("filters") or {}

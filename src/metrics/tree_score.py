@@ -277,8 +277,10 @@ class TreeScoreMetric(BaseMetric):
             self._set_debug_details("No parent models detected; neutral lineage score")
             return 1.0
 
-        # Build a lightweight config for inner evaluations
-        local_storage = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_storage")
+        # Build a lightweight config for inner evaluations (use writable /tmp storage)
+        local_root = os.getenv("LOCAL_STORAGE_DIR", "/tmp/model-manager")
+        local_storage = os.path.join(local_root, "tree_score")
+        Path(local_storage).mkdir(parents=True, exist_ok=True)
         config = ConfigContract(
             num_processes=1,
             run_multi=False,
