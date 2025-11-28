@@ -565,7 +565,10 @@ class ArtifactRepository:
 
     def fetch_by_name(self, name: str) -> list[dict]:
         matched: list[dict] = []
-        lower_name = name.lower()
+        canonical_name = (name or "").strip()
+        if not canonical_name:
+            return matched
+        lower_name = canonical_name.lower()
         try:
             for artifact_type in _DDB_ARTIFACT_TYPES:
                 response = self.table.query(
@@ -573,7 +576,11 @@ class ArtifactRepository:
                     KeyConditionExpression=Key("type").eq(artifact_type)
                     & Key("name_lc").eq(lower_name),
                 )
-                matched.extend(response.get("Items", []))
+                items = response.get("Items", [])
+                for item in items:
+                    stored_name = item.get("name")
+                    if isinstance(stored_name, str) and stored_name == canonical_name:
+                        matched.append(item)
         except Exception as exc:
             raise RepositoryError(str(exc)) from exc
 
