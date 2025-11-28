@@ -564,20 +564,41 @@ class ArtifactRepository:
         return self._scan_models(total_needed, start_key, predicate)
 
     def fetch_by_name(self, name: str) -> list[dict]:
+        import unicodedata
+
+        # Normalize and compare input
+        normalized = unicodedata.normalize("NFC", name or "")
+        lower_name = normalized.strip().lower()
+
+        print(f"[DEBUG fetch_by_name] raw_name={name!r}", flush=True)
+        print(f"[DEBUG fetch_by_name] normalized={normalized!r}", flush=True)
+        print(f"[DEBUG fetch_by_name] lower_name={lower_name!r}", flush=True)
+
         matched: list[dict] = []
-        lower_name = name.lower()
+
+        print(f"[DEBUG fetch_by_name] using GSI_ALPHABET_LISTING loop", flush=True)
+
         try:
             for artifact_type in _DDB_ARTIFACT_TYPES:
+                print(f"[DEBUG fetch_by_name] querying type={artifact_type} name_lc={lower_name}", flush=True)
+
                 response = self.table.query(
                     IndexName="GSI_ALPHABET_LISTING",
                     KeyConditionExpression=Key("type").eq(artifact_type)
                     & Key("name_lc").eq(lower_name),
                 )
-                matched.extend(response.get("Items", []))
+                items = response.get("Items", [])
+                print(f"[DEBUG fetch_by_name] returned {len(items)} items for {artifact_type}", flush=True)
+
+                matched.extend(items)
+
         except Exception as exc:
+            print(f"[DEBUG fetch_by_name] exception={exc}", flush=True)
             raise RepositoryError(str(exc)) from exc
 
+        print(f"[DEBUG fetch_by_name] FINAL MATCHED COUNT={len(matched)}", flush=True)
         return matched
+
 
     
 
