@@ -6,7 +6,7 @@ import requests
 
 class DatasetAndCodeScoreMetric(BaseMetric):
     # UPDATE ME TO USE LOCAL COPIES OF REPOS
-    metric_name: str = "dataset_and_code"
+    metric_name: str = "dataset_and_code_score"
     model_dir: Path
     readme_file: Path
 

@@ -48,7 +48,7 @@ OPENAPI_METRIC_FIELDS: Tuple[str, ...] = (
     "performance_claims",
     "license",
     "size_score",
-    "dataset_and_code",
+    "dataset_and_code_score",
     "dataset_quality",
     "code_quality",
     "reproducibility",
@@ -409,7 +409,7 @@ def _build_metric_specs() -> List[MetricSpec]:
             required_urls={"model"},
         ),
         MetricSpec(
-            name="dataset_and_code",
+            name="dataset_and_code_score",
             factory=DatasetAndCodeScoreMetric,
             priority=2,
             required_urls={"model"},

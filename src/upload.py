@@ -570,7 +570,7 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
     _put_item(table, item)
     _process_dependency_resolution(artifact_type, item)
     scoring_context = _gather_scoring_context(item, request)
-    if scoring_context.get("model_url"):
+    if artifact_type == "model" and scoring_context.get("model_url"):
         LOGGER.info(
             "Enqueuing scoring job for new %s artifact %s", artifact_type, artifact_id
         )
@@ -700,7 +700,7 @@ def _handle_spec_artifact_update(
     )
     _put_item(table, updated_item)
     scoring_context = _gather_scoring_context(updated_item)
-    if scoring_context.get("model_url"):
+    if artifact_type == "model" and scoring_context.get("model_url"):
         _enqueue_scoring_job(
             artifact_id, scoring_context, reason="artifact_update"
         )
@@ -889,7 +889,7 @@ _METRIC_BREAKDOWN_KEYS = [
     "performance_claims",
     "license",
     "size_score",
-    "dataset_and_code",
+    "dataset_and_code_score",
     "dataset_quality",
     "code_quality",
     "reproducibility",
@@ -1825,7 +1825,7 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         action = "updated" if existing else "created"
 
         queued_scoring_job = False
-        if scoring_context.get("model_url"):
+        if artifact_type == "model" and scoring_context.get("model_url"):
             queued_scoring_job = _enqueue_scoring_job(
                 request.model_id, scoring_context, reason=f"{artifact_type}_{action}"
             )

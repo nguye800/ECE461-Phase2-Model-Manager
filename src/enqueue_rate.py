@@ -101,8 +101,9 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
 
     if failed_metrics:
         response_payload["failed_metrics"] = failed_metrics
+        response_payload["status"] = "FAILED_METRICS"
         print(f"[rate.http] Metric failures detected for {model_id}: {failed_metrics}", flush=True)
-        return _json_response(500, response_payload)
+        return _json_response(200, response_payload)
 
     print(f"[rate.http] Returning rating for model {model_id}", flush=True)
     return _json_response(200, response_payload)
