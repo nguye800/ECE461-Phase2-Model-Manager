@@ -97,12 +97,14 @@ def _evaluate_license_text(license_text: Optional[str]) -> Dict[str, Any]:
     permissive = {"apache-2.0", "mit", "bsd-3-clause", "bsd-2-clause"}
     restricted = {"gpl-3.0", "agpl-3.0"}
 
-    if not license_text:
+
+    if license_text in {"", "unknown"}:
         return {
             "fine_tune_allowed": False,
             "inference_allowed": False,
-            "reason": "No license information available",
+            "reason": "License is unknown",
         }
+
 
     if any(term in license_text for term in restricted):
         return {
@@ -151,7 +153,7 @@ def _fetch_github_license_identifier(github_url: str) -> Optional[str]:
     license_info = payload.get("license") or {}
     spdx = license_info.get("spdx_id")
     if not spdx or spdx.upper() == "NOASSERTION":
-        return None
+        return "unknown"
     return spdx.lower()
 
 
@@ -468,8 +470,8 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
                 return _response(400, {"message": "Field 'github_url' must be a GitHub URL."})
 
             github_license = _fetch_github_license_identifier(github_url)
-            if not github_license:
-                return _response(502, {"message": "External license information could not be retrieved."})
+            #if not github_license:
+            #    return _response(502, {"message": "External license information could not be retrieved."})
 
             evaluation = _evaluate_license_text(github_license)
             hugging_face = "huggingface.co" in str(metadata_item.get("model_url", "")).lower()
