@@ -14,7 +14,7 @@ from pathlib import Path
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import boto3
 from botocore.exceptions import ClientError
@@ -421,12 +421,47 @@ def _build_config() -> ConfigContract:
 def _build_model_urls(item: Dict[str, Any]) -> ModelURLs:
     code_info = item.get("codebase") or {}
     dataset_info = item.get("database") or item.get("dataset") or {}
+    code_url = code_info.get("url") or item.get("code_url")
+    code_url = _normalize_github_url(code_url)
 
     return ModelURLs(
         model=item.get("model_url"),
-        codebase=code_info.get("url") or item.get("code_url"),
+        codebase=code_url,
         dataset=dataset_info.get("url") or item.get("dataset_url"),
     )
+
+
+def _normalize_github_url(url: Optional[str]) -> Optional[str]:
+    """Convert GitHub URLs (including /tree/<branch>) into cloneable forms."""
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+
+    netloc = parsed.netloc.lower()
+    if "github.com" not in netloc:
+        return url
+
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if len(segments) < 2:
+        return url
+
+    owner, repo = segments[0], segments[1]
+    if repo.endswith(".git"):
+        repo = repo[: -len(".git")]
+    normalized_path = f"/{owner}/{repo}.git"
+
+    normalized = parsed._replace(
+        scheme=parsed.scheme or "https",
+        netloc="github.com",
+        path=normalized_path,
+        params="",
+        query="",
+        fragment="",
+    )
+    return urlunparse(normalized)
 
 
 def _filter_specs_by_urls(
