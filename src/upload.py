@@ -35,7 +35,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 
 import boto3
-from boto3.dynamodb.types import TypeSerializer
 from boto3.session import Session
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
@@ -71,7 +70,6 @@ GITHUB_REPO_PATTERN = re.compile(
 _S3_CLIENT: Optional[boto3.client] = None
 _SQS_CLIENT: Optional[boto3.client] = None
 _ARTIFACTS_TABLE = None
-_DYNAMODB_SERIALIZER = TypeSerializer()
 try:  # pragma: no cover - requires AWS creds
     _BEDROCK_CLIENT = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 except Exception as exc:  # pragma: no cover
@@ -946,45 +944,22 @@ def _strip_nulls(value: Any) -> Any:
     return value
 
 
-def _serialize_item_for_dynamo(item: Dict[str, Any]) -> Dict[str, Any]:
+def _put_item(table, item: Dict[str, Any]) -> None:
+    sanitized = _strip_nulls(item)
     pk_field = os.getenv("RATE_PK_FIELD", "pk")
     sk_field = os.getenv("RATE_SK_FIELD", "sk")
-    prepared = _prepare_for_dynamo(item)
     for field in (pk_field, sk_field):
         if not field:
             continue
-        if field in prepared and prepared[field] is not None:
-            prepared[field] = str(prepared[field])
-    serialized = _DYNAMODB_SERIALIZER.serialize(prepared)
-    if "M" not in serialized:
-        raise UploadError("Serialized Dynamo item must be a map representation.")
-    attributes = serialized["M"]
-
-    for field in (pk_field, sk_field):
-        if not field:
-            continue
-        value = prepared.get(field)
+        value = sanitized.get(field)
         if value is None:
             continue
-        attributes[field] = {"S": str(value)}
-
-    return attributes
-
-
-def _put_item(table, item: Dict[str, Any]) -> None:
-    serialized = _serialize_item_for_dynamo(item)
+        sanitized[field] = str(value)
     try:
-        table.meta.client.put_item(TableName=table.name, Item=serialized)
+        table.put_item(Item=_prepare_for_dynamo(sanitized))
     except ClientError as exc:
-        message = exc.response.get("Error", {}).get("Message", "")
-        if "Type mismatch for key" not in message:
-            raise
-        LOGGER.warning(
-            "Dynamo serialization mismatch detected (%s). Falling back to default serialization.",
-            message,
-        )
-        fallback_item = _strip_nulls(item)
-        table.put_item(Item=_prepare_for_dynamo(fallback_item))
+        LOGGER.warning("Failed to write artifact metadata to DynamoDB: %s", exc)
+        raise
 
 
 def _merge_dataset_info(request: UploadRequest, metadata: Dict[str, Any], existing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
