@@ -86,6 +86,7 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
         net_score_latency=net_score_latency,
         breakdown=breakdown,
     )
+    _apply_size_score_format(response_payload, breakdown.get("size_score") or {})
     response_payload["scoring_status"] = scoring.get("status") or "UNKNOWN"
     response_payload["eligibility"] = eligibility
     if scoring.get("status") != "COMPLETED":
@@ -176,6 +177,25 @@ def _json_response(status_code: int, payload: Dict[str, Any]) -> Dict[str, Any]:
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(payload),
     }
+
+
+def _apply_size_score_format(response_payload: Dict[str, Any], size_entry: Dict[str, Any]) -> None:
+    device_defaults = {
+        "raspberry_pi": 0.0,
+        "jetson_nano": 0.0,
+        "desktop_pc": 0.0,
+        "aws_server": 0.0,
+    }
+    details = size_entry.get("details")
+    if isinstance(details, dict):
+        formatted = {
+            device: float(details.get(device, default))
+            for device, default in device_defaults.items()
+        }
+    else:
+        formatted = dict(device_defaults)
+    response_payload["size_score"] = formatted
+    response_payload["size_score_latency"] = int(size_entry.get("latency_ms", 0))
 
 
 def _build_dynamo_key(model_id: str) -> Dict[str, str]:
