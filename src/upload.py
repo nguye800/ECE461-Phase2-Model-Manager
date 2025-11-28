@@ -35,6 +35,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 
 import boto3
+from boto3.dynamodb.types import TypeSerializer
 from boto3.session import Session
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
@@ -70,6 +71,7 @@ GITHUB_REPO_PATTERN = re.compile(
 _S3_CLIENT: Optional[boto3.client] = None
 _SQS_CLIENT: Optional[boto3.client] = None
 _ARTIFACTS_TABLE = None
+_DYNAMODB_SERIALIZER = TypeSerializer()
 try:  # pragma: no cover - requires AWS creds
     _BEDROCK_CLIENT = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 except Exception as exc:  # pragma: no cover
@@ -218,11 +220,10 @@ def _identify_spec_operation(event: Dict[str, Any]) -> Optional[Tuple[str, str, 
     path_params = event.get("pathParameters") or {}
     path = _extract_path(event)
     segments = _parse_path_segments(path)
-    artifact_prefixes = {"artifact", "artifacts"}
 
     if method == "POST":
         artifact_type = path_params.get("artifact_type")
-        if not artifact_type and len(segments) >= 2 and segments[0] in artifact_prefixes:
+        if not artifact_type and len(segments) >= 2 and segments[0] == "artifact":
             artifact_type = segments[1]
         if artifact_type:
             return ("create", artifact_type, None)
@@ -230,7 +231,7 @@ def _identify_spec_operation(event: Dict[str, Any]) -> Optional[Tuple[str, str, 
     if method == "PUT":
         artifact_type = path_params.get("artifact_type")
         artifact_id = path_params.get("id") or path_params.get("artifact_id")
-        if (not artifact_type or not artifact_id) and len(segments) >= 3 and segments[0] in artifact_prefixes:
+        if (not artifact_type or not artifact_id) and len(segments) >= 3 and segments[0] == "artifacts":
             artifact_type = artifact_type or segments[1]
             artifact_id = artifact_id or segments[2]
         if artifact_type and artifact_id:
@@ -831,7 +832,7 @@ def _enqueue_scoring_job(
 def _extract_artifact_type(event: Dict[str, Any]) -> str:
     path = event.get("rawPath") or event.get("path", "")
     segments = [segment for segment in path.strip("/").split("/") if segment]
-    if len(segments) >= 2 and segments[0] in {"artifact", "artifacts"}:
+    if len(segments) >= 2 and segments[0] == "artifact":
         return segments[1].lower()
     path_params = event.get("pathParameters") or {}
     return (path_params.get("artifact_type") or "model").lower()
@@ -944,22 +945,40 @@ def _strip_nulls(value: Any) -> Any:
     return value
 
 
-def _put_item(table, item: Dict[str, Any]) -> None:
-    sanitized = _strip_nulls(item)
+def _serialize_item_for_dynamo(item: Dict[str, Any]) -> Dict[str, Any]:
+    prepared = _prepare_for_dynamo(item)
+    serialized = _DYNAMODB_SERIALIZER.serialize(prepared)
+    if "M" not in serialized:
+        raise UploadError("Serialized Dynamo item must be a map representation.")
+    attributes = serialized["M"]
+
     pk_field = os.getenv("RATE_PK_FIELD", "pk")
     sk_field = os.getenv("RATE_SK_FIELD", "sk")
     for field in (pk_field, sk_field):
         if not field:
             continue
-        value = sanitized.get(field)
+        value = prepared.get(field)
         if value is None:
             continue
-        sanitized[field] = str(value)
+        attributes[field] = {"S": str(value)}
+
+    return attributes
+
+
+def _put_item(table, item: Dict[str, Any]) -> None:
+    serialized = _serialize_item_for_dynamo(item)
     try:
-        table.put_item(Item=_prepare_for_dynamo(sanitized))
+        table.meta.client.put_item(TableName=table.name, Item=serialized)
     except ClientError as exc:
-        LOGGER.warning("Failed to write artifact metadata to DynamoDB: %s", exc)
-        raise
+        message = exc.response.get("Error", {}).get("Message", "")
+        if "Type mismatch for key" not in message:
+            raise
+        LOGGER.warning(
+            "Dynamo serialization mismatch detected (%s). Falling back to default serialization.",
+            message,
+        )
+        fallback_item = _strip_nulls(item)
+        table.put_item(Item=_prepare_for_dynamo(fallback_item))
 
 
 def _merge_dataset_info(request: UploadRequest, metadata: Dict[str, Any], existing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
