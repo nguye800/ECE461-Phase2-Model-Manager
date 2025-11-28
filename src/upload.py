@@ -220,10 +220,11 @@ def _identify_spec_operation(event: Dict[str, Any]) -> Optional[Tuple[str, str, 
     path_params = event.get("pathParameters") or {}
     path = _extract_path(event)
     segments = _parse_path_segments(path)
+    artifact_prefixes = {"artifact", "artifacts"}
 
     if method == "POST":
         artifact_type = path_params.get("artifact_type")
-        if not artifact_type and len(segments) >= 2 and segments[0] == "artifact":
+        if not artifact_type and len(segments) >= 2 and segments[0] in artifact_prefixes:
             artifact_type = segments[1]
         if artifact_type:
             return ("create", artifact_type, None)
@@ -231,7 +232,7 @@ def _identify_spec_operation(event: Dict[str, Any]) -> Optional[Tuple[str, str, 
     if method == "PUT":
         artifact_type = path_params.get("artifact_type")
         artifact_id = path_params.get("id") or path_params.get("artifact_id")
-        if (not artifact_type or not artifact_id) and len(segments) >= 3 and segments[0] == "artifacts":
+        if (not artifact_type or not artifact_id) and len(segments) >= 3 and segments[0] in artifact_prefixes:
             artifact_type = artifact_type or segments[1]
             artifact_id = artifact_id or segments[2]
         if artifact_type and artifact_id:
@@ -832,7 +833,7 @@ def _enqueue_scoring_job(
 def _extract_artifact_type(event: Dict[str, Any]) -> str:
     path = event.get("rawPath") or event.get("path", "")
     segments = [segment for segment in path.strip("/").split("/") if segment]
-    if len(segments) >= 2 and segments[0] == "artifact":
+    if len(segments) >= 2 and segments[0] in {"artifact", "artifacts"}:
         return segments[1].lower()
     path_params = event.get("pathParameters") or {}
     return (path_params.get("artifact_type") or "model").lower()
