@@ -32,12 +32,15 @@ from urllib.parse import unquote_plus
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
+
+_DDB_ARTIFACT_TYPES = ["MODEL", "DATASET", "CODE"]
+
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TABLE_NAME = os.environ.get("MODEL_REGISTRY_TABLE", "model_registry")
-DEFAULT_LIMIT = 25
+DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
-SCAN_BATCH_SIZE = 25
+SCAN_BATCH_SIZE = 50
 
 
 class RepositoryError(RuntimeError):
@@ -55,7 +58,12 @@ def lambda_handler(event: dict, context: Any) -> dict:
     AWS Lambda entry point. Delegates to `handle_search` for backwards
     compatibility with other modules in this repo.
     """
-
+    method = (event.get("requestContext", {}).get("http", {}) or {}).get("method") or event.get("httpMethod")
+    path = event.get("rawPath") or event.get("path")
+    print(
+        f"[search.lambda] Received {method or 'UNKNOWN'} {path or '/'} body={event.get('body')}",
+        flush=True,
+    )
     return handle_search(event, context)
 
 
@@ -66,111 +74,134 @@ def handle_search(event: dict, _context: Any) -> dict:
 
     method = _extract_method(event)
     path = _normalize_path(event)
+    print(f"[search.handle] Routing {method} {path}", flush=True)
 
     if method == "POST" and path == "/artifacts":
+        print("[search.handle] dispatching to _handle_post_artifacts", flush=True)
         return _handle_post_artifacts(event)
     if method == "GET" and path.startswith("/artifact/byName"):
+        print("[search.handle] dispatching to _handle_get_artifact_by_name", flush=True)
         return _handle_get_artifact_by_name(event, path)
     if method == "POST" and path == "/artifact/byRegEx":
+        print("[search.handle] dispatching to _handle_post_regex", flush=True)
         return _handle_post_regex(event)
 
+    print("[search.handle] unsupported route", flush=True)
     return _error_response(
         404,
         f"Unsupported route: {method} {path}",
+        log_prefix="[search.handle]",
     )
 
 
 def _handle_post_artifacts(event: dict) -> dict:
+    log_prefix = "[search.post_artifacts]"
     try:
-        payload = _parse_json_body(event)
+        queries_input = _parse_json_body(event, expected_type=list)
     except ValueError as exc:
-        return _error_response(400, str(exc))
+        return _error_response(400, str(exc), log_prefix=log_prefix)
+    print(f"[search.post_artifacts] payload={queries_input}", flush=True)
 
-    queries = payload.get("artifact_queries") or payload.get("queries") or []
+    queries = queries_input or [{"name": "*"}]
     if not queries:
         queries = [{"name": "*"}]
-    if not isinstance(queries, list):
-        return _error_response(400, "`artifact_queries` must be a list")
+
+    normalized_queries: list[dict] = []
+    for query in queries:
+        if not isinstance(query, dict):
+            return _error_response(
+                400, "Each artifact_query must be a JSON object", log_prefix=log_prefix
+            )
+        normalized_query = dict(query)
+        normalized_query["name"] = str(query.get("name") or "*").strip() or "*"
+        original_types = query.get("types")
+        try:
+            normalized_types = _normalize_type_filters(original_types)
+        except ValueError as exc:
+            return _error_response(400, str(exc), log_prefix=log_prefix)
+        if normalized_types is not None:
+            normalized_query["types"] = normalized_types
+        else:
+            normalized_query.pop("types", None)
+            if isinstance(original_types, list) and not original_types:
+                print(
+                    "[search.post_artifacts] treating blank 'types' filter as wildcard",
+                    flush=True,
+                )
+        normalized_queries.append(normalized_query)
 
     limit = _clamp_limit(
-        payload.get("limit")
-        or _get_query_param(event, "limit")
+        _get_query_param(event, "limit")
         or _get_header(event, "x-limit")
     )
-    pagination = _extract_pagination_params(payload, event)
-    offset_input = (
-        payload.get("offset")
-        or _get_query_param(event, "offset")
-        or _get_header(event, "x-offset")
-    )
+    pagination = _extract_pagination_params(None, event)
     target = min(limit + pagination.skip, MAX_LIMIT + pagination.skip)
 
     repo = _get_repository()
     try:
-        artifacts, next_key = repo.search(queries, target, pagination.start_key)
+        artifacts, next_key = repo.search(normalized_queries, target, pagination.start_key)
     except RepositoryError as exc:
         LOGGER.error("Failed to execute artifact search: %s", exc)
-        return _error_response(500, "Unable to execute search")
+        return _error_response(500, "Unable to execute search", log_prefix=log_prefix)
 
     artifacts = artifacts[pagination.skip : pagination.skip + limit]
-    plain_artifacts = [_dynamo_to_plain(a) for a in artifacts]
+    plain_artifacts = [_artifact_metadata(a) for a in artifacts]
 
-    headers = {}
-    if next_key:
-        headers["x-next-offset"] = _encode_pagination_token(next_key)
+    if len(plain_artifacts) > DEFAULT_LIMIT:
+        print(
+            f"[search.post_artifacts] rejecting {len(plain_artifacts)} artifacts (> {DEFAULT_LIMIT})",
+            flush=True,
+        )
+        return _error_response(413, "too many artifacts returned.", log_prefix=log_prefix)
 
+    headers = _build_offset_header(next_key)
 
-    # Maintain token OR numeric offset exactly as user supplied
-    if isinstance(offset_input, str) and offset_input.strip() and not offset_input.isdigit():
-        normalized_offset = offset_input
-    else:
-        normalized_offset = pagination.skip
-
-
-    body = {
-        "artifacts": plain_artifacts,
-        "page": {
-            "offset": normalized_offset,
-            "limit": limit,
-            "returned": len(plain_artifacts),
-            "has_more": bool(next_key),
-        },
-    }
-    return _success_response(body, headers=headers)
+    print(
+        f"[search.post_artifacts] returning {len(plain_artifacts)} artifacts next_key={bool(next_key)}",
+        flush=True,
+    )
+    return _success_response(plain_artifacts, headers=headers, log_prefix=log_prefix)
 
 
 def _handle_get_artifact_by_name(event: dict, path: str) -> dict:
+    log_prefix = "[search.byName]"
     name = _extract_name_parameter(event, path)
     if not name:
-        return _error_response(400, "Missing artifact name in path")
+        print(f"[search.byName] Missing artifact name in path", flush=True)
+        return _error_response(400, "Missing artifact name in path", log_prefix=log_prefix)
+    print(f"[search.byName] looking up name={name}", flush=True)
 
     repo = _get_repository()
     try:
         records = repo.fetch_by_name(name)
     except RepositoryError as exc:
         LOGGER.error("Failed to fetch artifact by name %s: %s", name, exc)
-        return _error_response(500, "Unable to query artifact metadata")
+        return _error_response(500, "Unable to query artifact metadata", log_prefix=log_prefix)
 
     if not records:
-        return _error_response(404, f"No artifact found with name '{name}'")
+        return _error_response(404, f"No artifact found with name '{name}'", log_prefix=log_prefix)
 
-    return _success_response({"artifacts": [_dynamo_to_plain(r) for r in records]})
+    print(f"[search.byName] found {len(records)} records", flush=True)
+    return _success_response([_artifact_metadata(r) for r in records], log_prefix=log_prefix)
 
 
 def _handle_post_regex(event: dict) -> dict:
+    log_prefix = "[search.regex]"
     try:
-        payload = _parse_json_body(event)
+        payload = _parse_json_body(event, expected_type=dict)
     except ValueError as exc:
-        return _error_response(400, str(exc))
+        return _error_response(400, str(exc), log_prefix=log_prefix)
 
-    pattern = payload.get("pattern")
-    if not pattern:
-        return _error_response(400, "`pattern` is required for regex search")
+    pattern = payload.get("regex")
+    if pattern is None:
+        pattern = payload.get("pattern")
+    if not isinstance(pattern, str) or not pattern.strip():
+        return _error_response(400, "`regex` is required for regex search", log_prefix=log_prefix)
 
     try:
         compiled = re.compile(pattern, re.IGNORECASE)
     except re.error as exc:
-        return _error_response(400, f"Invalid regular expression: {exc}")
+        return _error_response(400, f"Invalid regular expression: {exc}", log_prefix=log_prefix)
 
     limit = _clamp_limit(
         payload.get("limit")
@@ -178,11 +209,6 @@ def _handle_post_regex(event: dict) -> dict:
         or _get_header(event, "x-limit")
     )
     pagination = _extract_pagination_params(payload, event)
-    offset_input = (
-        payload.get("offset")
-        or _get_query_param(event, "offset")
-        or _get_header(event, "x-offset")
-    )
     target = min(limit + pagination.skip, MAX_LIMIT + pagination.skip)
 
     repo = _get_repository()
@@ -190,39 +216,31 @@ def _handle_post_regex(event: dict) -> dict:
         artifacts, next_key = repo.regex_search(compiled, target, pagination.start_key)
     except RepositoryError as exc:
         LOGGER.error("Failed to run regex search: %s", exc)
-        return _error_response(500, "Unable to execute regex search")
+        return _error_response(500, "Unable to execute regex search", log_prefix=log_prefix)
 
     artifacts = artifacts[pagination.skip : pagination.skip + limit]
-    plain_artifacts = [_dynamo_to_plain(a) for a in artifacts]
+    plain_artifacts = [_artifact_metadata(a) for a in artifacts]
+    if not plain_artifacts:
+        print("[search.regex] no artifacts matched regex", flush=True)
+        return _error_response(404, "No artifact found under this regex.", log_prefix=log_prefix)
 
-    headers = {}
-    if next_key:
-        headers["x-next-offset"] = _encode_pagination_token(next_key)
+    headers = _build_offset_header(next_key)
 
-    normalized_offset = pagination.skip
-    if pagination.start_key and isinstance(offset_input, str) and offset_input.strip():
-        normalized_offset = offset_input
-
-    body = {
-        "artifacts": plain_artifacts,
-        "page": {
-            "offset": normalized_offset,
-            "limit": limit,
-            "returned": len(plain_artifacts),
-            "has_more": bool(next_key),
-        },
-    }
-    return _success_response(body, headers=headers)
+    print(
+        f"[search.regex] returning {len(plain_artifacts)} artifacts next={bool(next_key)}",
+        flush=True,
+    )
+    return _success_response(plain_artifacts, headers=headers, log_prefix=log_prefix)
 
 
 # -----------------------------------------------------------------------------
 # Helper utilities
 
 
-def _parse_json_body(event: dict) -> dict:
+def _parse_json_body(event: dict, *, expected_type: type | tuple[type, ...] = dict):
     body = event.get("body")
     if body is None:
-        return {}
+        raise ValueError("Request body is required.")
 
     if event.get("isBase64Encoded"):
         body = base64.b64decode(body).decode("utf-8")
@@ -231,8 +249,13 @@ def _parse_json_body(event: dict) -> dict:
         payload = json.loads(body or "{}")
     except json.JSONDecodeError:
         raise ValueError("Request body must be valid JSON") from None
-    if not isinstance(payload, dict):
-        raise ValueError("Request body must be a JSON object")
+    if expected_type is not None and not isinstance(payload, expected_type):
+        expected_name = (
+            " or ".join(t.__name__ for t in expected_type)
+            if isinstance(expected_type, tuple)
+            else expected_type.__name__
+        )
+        raise ValueError(f"Request body must be a JSON {expected_name}")
     return payload
 
 
@@ -282,9 +305,10 @@ def _clamp_limit(candidate: Any) -> int:
     return max(1, min(value, MAX_LIMIT))
 
 
-def _extract_pagination_params(payload: dict, event: dict) -> PaginationParams:
+def _extract_pagination_params(payload: Any, event: dict) -> PaginationParams:
+    body_offset = payload.get("offset") if isinstance(payload, dict) else None
     raw = (
-        payload.get("offset")
+        body_offset
         or _get_query_param(event, "offset")
         or _get_header(event, "x-offset")
     )
@@ -326,6 +350,12 @@ def _encode_pagination_token(key: dict[str, Any]) -> str:
     return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("utf-8").rstrip("=")
 
 
+def _build_offset_header(next_key: dict[str, Any] | None) -> dict:
+    if not next_key:
+        return {}
+    return {"offset": _encode_pagination_token(next_key)}
+
+
 def _get_query_param(event: dict, key: str) -> str | None:
     params = event.get("queryStringParameters") or {}
     if key in params and params[key] is not None:
@@ -347,14 +377,22 @@ def _get_header(event: dict, key: str) -> str | None:
     return None
 
 
-def _success_response(body: dict, headers: dict | None = None) -> dict:
+def _log_response(prefix: str, status_code: int) -> None:
+    print(f"[{prefix}] Responding with status {status_code}", flush=True)
+
+
+def _success_response(
+    body: dict, headers: dict | None = None, log_prefix: str = "search"
+) -> dict:
     _headers = {"Content-Type": "application/json"}
     if headers:
         _headers.update(headers)
+    _log_response(log_prefix, 200)
     return {"statusCode": 200, "headers": _headers, "body": json.dumps(body)}
 
 
-def _error_response(status_code: int, message: str) -> dict:
+def _error_response(status_code: int, message: str, log_prefix: str = "search") -> dict:
+    _log_response(log_prefix, status_code)
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},
@@ -372,6 +410,86 @@ def _dynamo_to_plain(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _dynamo_to_plain(v) for k, v in value.items()}
     return value
+
+
+def _normalize_type_filters(types_value: Any) -> list[str] | None:
+    if types_value is None:
+        return None
+    if not isinstance(types_value, list):
+        raise ValueError("`types` must be an array of artifact types")
+    normalized: list[str] = []
+    for entry in types_value:
+        normalized_entry = _normalize_user_type(entry)
+        if normalized_entry:
+            normalized.append(normalized_entry)
+    if not normalized:
+        return None
+    return normalized
+
+
+def _normalize_user_type(value: Any) -> str:
+    if value is None:
+        raise ValueError("`types` entries must be non-empty strings")
+    normalized = str(value).strip().lower()
+    allowed = {"model", "dataset", "code"}
+    if normalized not in allowed:
+        raise ValueError(f"Unsupported artifact type '{value}'")
+    return normalized
+
+
+def _artifact_metadata(item: dict) -> dict:
+    plain = _dynamo_to_plain(item)
+    metadata_section = (
+        plain.get("metadata") if isinstance(plain, dict) else None
+    )
+    def _first(*keys):
+        for key in keys:
+            if isinstance(key, tuple):
+                current = metadata_section if key[0] == "metadata" else plain
+                attribute = current.get(key[1]) if current else None
+            else:
+                attribute = plain.get(key) if isinstance(plain, dict) else None
+            if attribute:
+                return attribute
+        return None
+
+    name = _first("name", ("metadata", "name"))
+    artifact_id = _first("id", "artifact_id", ("metadata", "id"))
+    artifact_type = _normalize_response_type(
+        _first("artifact_type", "type", ("metadata", "type"))
+    )
+
+    return {
+        "name": name,
+        "id": artifact_id,
+        "type": artifact_type,
+    }
+
+
+def _normalize_response_type(value: Any) -> str:
+    if value is None:
+        return "model"
+    normalized = str(value).strip().lower()
+    mapping = {"model", "dataset", "code"}
+    if normalized in mapping:
+        return normalized
+    return normalized or "model"
+
+
+def _extract_item_type(item: dict) -> str:
+    raw_value = (
+        item.get("artifact_type")
+        or item.get("type")
+        or item.get("entity_type")
+    )
+    if raw_value is None:
+        return "model"
+    normalized = str(raw_value).strip().lower()
+    if normalized in {"model", "dataset", "code"}:
+        return normalized
+    if normalized == "model_meta":
+        return "model"
+    return normalized or "model"
 
 
 # -----------------------------------------------------------------------------
@@ -404,16 +522,20 @@ class ArtifactRepository:
         return self._scan_models(total_needed, start_key, predicate)
 
     def fetch_by_name(self, name: str) -> list[dict]:
+        matched: list[dict] = []
+        lower_name = name.lower()
         try:
-            response = self.table.query(
-                IndexName="GSI_ALPHABET_LISTING",
-                KeyConditionExpression=Key("type").eq("MODEL") 
-                                    & Key("name_lc").eq(name.lower()),
-            )
+            for artifact_type in _DDB_ARTIFACT_TYPES:
+                response = self.table.query(
+                    IndexName="GSI_ALPHABET_LISTING",
+                    KeyConditionExpression=Key("type").eq(artifact_type)
+                    & Key("name_lc").eq(lower_name),
+                )
+                matched.extend(response.get("Items", []))
         except Exception as exc:
             raise RepositoryError(str(exc)) from exc
 
-        return response.get("Items", [])
+        return matched
 
     
 
@@ -449,7 +571,8 @@ class ArtifactRepository:
             while len(matched) < total_needed:
                 scan_limit = max(total_needed - len(matched), SCAN_BATCH_SIZE)
                 scan_kwargs: dict[str, Any] = {
-                    "FilterExpression": Attr("type").eq("MODEL") & Attr("sk").eq("META"),
+                    "FilterExpression": Attr("sk").eq("META")
+                    & Attr("type").is_in(_DDB_ARTIFACT_TYPES),
                     "Limit": scan_limit,
                 }
                 if exclusive_start:
@@ -488,8 +611,15 @@ def _matches_any_query(item: dict, queries: Sequence[dict]) -> bool:
 
 
 def _matches_single_query(item: dict, query: dict) -> bool:
-    if item.get("type") != "MODEL" or item.get("sk") != "META":
+    if item.get("sk") != "META":
         return False
+
+    artifact_type = _extract_item_type(item)
+
+    type_filters = query.get("types")
+    if type_filters:
+        if artifact_type not in type_filters:
+            return False
 
     name_filter = str(query.get("name") or "*").strip()
     if name_filter not in ("", "*"):

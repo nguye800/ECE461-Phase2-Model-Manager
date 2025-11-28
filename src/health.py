@@ -80,6 +80,14 @@ def _elapsed_ms(start_time):
     return round((time.perf_counter() - start_time) * 1000, 2)
 
 
+def _log_request(prefix: str, method: str, path: str, body):
+    print(
+        f"[{prefix}] Received {method or 'UNKNOWN'} {path or '/'} "
+        f"body={body if body is not None else '<none>'}",
+        flush=True,
+    )
+
+
 def _extract_http_method(event):
     http_ctx = event.get("requestContext", {}).get("http", {})
     method = http_ctx.get("method")
@@ -232,6 +240,7 @@ def heartbeat_handler(event, context):
     Performs reachability checks against DynamoDB + S3 and reports aggregate status.
     """
 
+    print("[health.heartbeat] Probing DynamoDB and S3 reachability", flush=True)
     now = _now_iso()
     dynamodb_status = _probe_dynamodb()
     s3_status = _probe_s3()
@@ -257,6 +266,10 @@ def heartbeat_handler(event, context):
         },
     }
 
+    print(
+        f"[health.heartbeat] statusCode={status_code} all_ok={all_ok}",
+        flush=True,
+    )
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},
@@ -273,13 +286,22 @@ def handler(event, context):
     method = _extract_http_method(event)
     path = _normalize_path(_extract_http_path(event))
     path_lower = path.lower()
+    _log_request("health.handler", method, path, event.get("body"))
 
     if method == "GET" and path_lower.endswith("/health/components"):
+        print("[health.handler] routing to components_handler", flush=True)
         return components_handler(event, context)
 
+    if method == "GET" and path_lower.endswith("/tracks"):
+        print("[health.handler] routing to tracks_handler", flush=True)
+        return tracks_handler(event, context)
+
     if method == "GET" and path_lower.endswith("/health"):
+        print("[health.handler] routing to heartbeat_handler", flush=True)
         return heartbeat_handler(event, context)
 
+    print("[health.handler] no route matched", flush=True)
+    print("[health.handler] Responding with status 404", flush=True)
     return {
         "statusCode": 404,
         "headers": {"Content-Type": "application/json"},
@@ -458,8 +480,60 @@ def components_handler(event, context):
         "window_minutes": window_minutes,
     }
 
+    print(
+        f"[health.components] returning {len(components)} components",
+        flush=True,
+    )
     return {
         "statusCode": 200,
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(body),
     }
+
+
+def tracks_handler(event, context):
+    """
+    Handler for GET /tracks
+
+    Returns the list of planned tracks for the student.
+    """
+
+    try:
+        body = {
+            "plannedTracks": [
+                "Other Security track",
+            ],
+        }
+        print("[health.tracks] Returning planned tracks payload", flush=True)
+        print("[health.tracks] Responding with status 200", flush=True)
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(body),
+        }
+    except Exception as exc:  # pragma: no cover
+        print(f"[health.tracks] Unexpected error: {exc}", flush=True)
+        print("[health.tracks] Responding with status 500", flush=True)
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": "Unable to retrieve tracks"}),
+        }
+        body = {
+            "plannedTracks": [
+                "Security track",
+            ],
+        }
+        print("[health.tracks] Returning planned tracks payload", flush=True)
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(body),
+        }
+    except Exception as exc:  # pragma: no cover
+        print(f"[health.tracks] Unexpected error: {exc}", flush=True)
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": "Unable to retrieve tracks"}),
+        }

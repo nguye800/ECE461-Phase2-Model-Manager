@@ -34,9 +34,18 @@ class EnqueueException(Exception):
 def handler(event: Any, context: Any) -> Dict[str, Any]:
     """HTTP Lambda entrypoint that returns the latest model rating."""
     event_dict = _coerce_event(event)
+    method = (
+        event_dict.get("requestContext", {})
+        .get("http", {})
+        .get("method", event_dict.get("httpMethod"))
+    )
+    path = event_dict.get("rawPath") or event_dict.get("path")
+    print(
+        f"[rate.http] Received {method or 'UNKNOWN'} {path or '/'} body={event_dict.get('body')}",
+        flush=True,
+    )
 
     try:
-        _require_auth(event_dict)
         model_id = _extract_model_id(event_dict)
     except EnqueueException as exc:
         return _json_response(exc.status_code, {"message": exc.message})
@@ -54,10 +63,12 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
         response = table.get_item(Key=_build_dynamo_key(model_id))
     except ClientError as exc:  # pragma: no cover - network dependent
         logger.exception("DynamoDB get_item failed")
+        print(f"[rate.http] DynamoDB get_item failed: {exc}", flush=True)
         return _json_response(500, {"message": "failed to access metadata"})
 
     item = response.get("Item")
     if not item:
+        print(f"[rate.http] Model {model_id} not found", flush=True)
         return _json_response(404, {"message": f"model {model_id} not found"})
 
     scoring = item.get("scoring", {})
@@ -66,13 +77,16 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
 
     if scoring.get("status") != "COMPLETED":
         reason = eligibility.get("reason") or scoring.get("status") or "rating pending"
+        print(f"[rate.http] Rating pending reason={reason}", flush=True)
         return _json_response(500, {"message": reason})
 
     if eligibility.get("minimum_evidence_met") is False:
         reason = eligibility.get("reason") or "insufficient evidence coverage"
+        print(f"[rate.http] Eligibility failure: {reason}", flush=True)
         return _json_response(500, {"message": reason})
 
     if not metrics_blob:
+        print("[rate.http] Metrics blob missing", flush=True)
         return _json_response(500, {"message": "metrics unavailable"})
 
     breakdown = metrics_blob.get("breakdown", {})
@@ -86,6 +100,7 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
         net_score_latency=net_score_latency,
         breakdown=breakdown,
     )
+    print(f"[rate.http] Returning rating for model {model_id}", flush=True)
     return _json_response(200, response_payload)
 
 
@@ -98,21 +113,6 @@ def _coerce_event(event: Any) -> Dict[str, Any]:
     if event is None:
         return {}
     return event
-
-
-def _require_auth(event: Dict[str, Any]) -> None:
-    expected_token = os.getenv("RATE_API_TOKEN")
-    if not expected_token:
-        return
-
-    headers = event.get("headers") or {}
-    provided = headers.get("Authorization") or headers.get("authorization")
-    if not provided:
-        raise EnqueueException(403, "authentication token missing")
-
-    token = provided.split(" ", 1)[1] if " " in provided else provided
-    if token != expected_token:
-        raise EnqueueException(403, "authentication failed")
 
 
 def _extract_model_id(event: Dict[str, Any]) -> str:
@@ -153,6 +153,7 @@ def _extract_model_id(event: Dict[str, Any]) -> str:
 
 
 def _json_response(status_code: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+    print(f"[rate.http] Responding with status {status_code}", flush=True)
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},

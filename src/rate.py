@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse
 
 import boto3
 from botocore.exceptions import ClientError
@@ -98,6 +100,10 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
     elif event is None:
         event = {}
 
+    print(
+        f"[rate.sqs] Received batch with {len(event.get('Records', [])) if isinstance(event, dict) else 0} records",
+        flush=True,
+    )
     if "Records" not in event:
         logger.warning("rate handler invoked without SQS Records payload.")
         return {"batchItemFailures": []}
@@ -114,19 +120,29 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
             model_id = payload.get("model_id") or payload.get("id")
             if not model_id:
                 raise RateException(400, "missing model_id in SQS message")
-            _score_model(model_id)
+            _score_model(model_id, set())
         except RateException as exc:
             logger.error("Failed to score model from SQS: %s", exc)
+            print(f"[rate.sqs] RateException for message {message_id}: {exc}", flush=True)
             if message_id:
                 failures.append({"itemIdentifier": message_id})
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Unexpected error processing SQS record")
             if message_id:
                 failures.append({"itemIdentifier": message_id})
+            print(f"[rate.sqs] Unexpected error for message {message_id}: {exc}", flush=True)
+    print(f"[rate.sqs] Processing complete failures={len(failures)}", flush=True)
     return {"batchItemFailures": failures}
 
 
-def _score_model(model_id: str) -> Dict[str, Any]:
+def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str, Any]:
+    if visited is None:
+        visited = set()
+    if model_id in visited:
+        logger.debug("Skipping already-scored model %s to avoid cycles", model_id)
+        return {}
+    visited.add(model_id)
+
     table = _get_table()
     item: Optional[Dict[str, Any]] = None
     try:
@@ -249,6 +265,10 @@ def _score_model(model_id: str) -> Dict[str, Any]:
         record["eligibility"] = _decimalize(eligibility_payload)
         record["approval"] = _decimalize(approval_payload)
         record["updated_at"] = now_iso
+        base_models = _collect_base_models(record, executed_metrics)
+        if base_models:
+            record["base_models"] = _decimalize(base_models)
+            record["lineage"] = _decimalize(_build_lineage_payload(record, base_models))
         _append_audit_entry(
             record,
             action="RATE",
@@ -256,6 +276,17 @@ def _score_model(model_id: str) -> Dict[str, Any]:
         )
 
         table.put_item(Item=record)
+
+        for base_entry in base_models:
+            base_id = base_entry.get("artifact_id") or base_entry.get("model_id")
+            if not base_id or base_id in visited:
+                continue
+            try:
+                _score_model(base_id, visited)
+            except RateException as exc:
+                logger.warning("Skipping base model %s during lineage scoring: %s", base_id, exc.message)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Unexpected error while scoring base model %s: %s", base_id, exc)
 
         return _build_openapi_response(
             item=record,
@@ -626,3 +657,135 @@ def _append_audit_entry(
     }
     audits = item.setdefault("audits", [])
     audits.append(entry)
+
+
+def _collect_base_models(
+    record: Dict[str, Any], metrics: Dict[str, BaseMetric]
+) -> List[Dict[str, Any]]:
+    normalized: Dict[str, Dict[str, Any]] = {}
+    raw_base_models = record.get("base_models") or []
+    for entry in raw_base_models:
+        normalized_entry = _normalize_base_model_entry(entry)
+        artifact_id = normalized_entry.get("artifact_id")
+        if not artifact_id:
+            continue
+        normalized[artifact_id] = normalized_entry
+
+    tree_metric = next(
+        (metric for metric in metrics.values() if metric.metric_name == "tree_score"),
+        None,
+    )
+    if tree_metric:
+        for detail in getattr(tree_metric, "parent_details", []) or []:
+            normalized_entry = _normalize_tree_score_detail(detail)
+            artifact_id = normalized_entry.get("artifact_id")
+            if not artifact_id:
+                continue
+            existing = normalized.get(artifact_id, {})
+            merged = {**normalized_entry, **existing}
+            normalized[artifact_id] = merged
+
+    return list(normalized.values())
+
+
+def _normalize_base_model_entry(entry: Any) -> Dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    artifact_id = (
+        entry.get("artifact_id")
+        or entry.get("model_id")
+        or entry.get("id")
+        or _stable_artifact_id(entry.get("model_url") or entry.get("name") or uuid.uuid4().hex)
+    )
+    model_url = entry.get("model_url") or entry.get("url")
+    normalized = {
+        "artifact_id": artifact_id,
+        "model_id": artifact_id,
+        "name": entry.get("name") or _infer_artifact_name(model_url) or artifact_id,
+        "model_url": model_url,
+        "source": entry.get("source") or "registry",
+        "relation": entry.get("relation") or "base_model",
+    }
+    if entry.get("metadata"):
+        normalized["metadata"] = entry["metadata"]
+    if entry.get("score") is not None:
+        normalized["score"] = float(entry["score"])
+    return normalized
+
+
+def _normalize_tree_score_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
+    repo_id = detail.get("repo_id") or detail.get("model_url") or uuid.uuid4().hex
+    artifact_id = _stable_artifact_id(repo_id)
+    model_url = detail.get("model_url") or repo_id
+    entry = {
+        "artifact_id": artifact_id,
+        "model_id": artifact_id,
+        "name": detail.get("name") or _infer_artifact_name(model_url) or repo_id,
+        "model_url": model_url,
+        "source": detail.get("source") or "config_json",
+        "relation": detail.get("relation") or "base_model",
+        "score": float(detail.get("score", 0.0)),
+    }
+    if detail.get("dataset_url"):
+        entry["dataset_url"] = detail["dataset_url"]
+    if detail.get("codebase_url"):
+        entry["codebase_url"] = detail["codebase_url"]
+    entry["added_at"] = _utc_now_iso()
+    return entry
+
+
+def _build_lineage_payload(
+    record: Dict[str, Any], base_models: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+    primary_id = record.get("model_id")
+    primary_name = record.get("name") or record.get("metadata", {}).get("name") or primary_id
+    seen_nodes: Set[str] = set()
+    nodes.append(
+        {
+            "artifact_id": primary_id,
+            "name": primary_name,
+            "source": "registry",
+        }
+    )
+    if primary_id:
+        seen_nodes.add(primary_id)
+    for base in base_models:
+        base_id = base.get("artifact_id")
+        if not base_id:
+            continue
+        if base_id not in seen_nodes:
+            nodes.append(
+                {
+                    "artifact_id": base_id,
+                    "name": base.get("name") or base_id,
+                    "source": base.get("source") or "base_model",
+                }
+            )
+            seen_nodes.add(base_id)
+        edges.append(
+            {
+                "from_node_artifact_id": base_id,
+                "to_node_artifact_id": primary_id,
+                "relationship": base.get("relation") or "base_model",
+            }
+        )
+    return {"nodes": nodes, "edges": edges}
+
+
+def _stable_artifact_id(value: str) -> str:
+    try:
+        return uuid.uuid5(uuid.NAMESPACE_URL, value).hex
+    except Exception:
+        return uuid.uuid4().hex
+
+
+def _infer_artifact_name(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme and parsed.netloc:
+        candidate = parsed.path.rstrip("/").split("/")[-1]
+        return candidate or None
+    return value.rstrip("/").split("/")[-1] or None
