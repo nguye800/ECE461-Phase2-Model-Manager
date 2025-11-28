@@ -32,11 +32,12 @@ from urllib.parse import unquote_plus
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
-try:  # pragma: no cover - optional dependency loaded at runtime
+try:
     import regex as _timeout_regex
-except ImportError:  # pragma: no cover - fallback for local tooling
-    print("regex could not be imported")
+    _REGEX_TIMEOUT_EXCEPTION_TYPE = getattr(_timeout_regex, "TimeoutError", TimeoutError)
+except ImportError:
     _timeout_regex = None
+    _REGEX_TIMEOUT_EXCEPTION_TYPE = TimeoutError
 
 _DDB_ARTIFACT_TYPES = ["MODEL", "DATASET", "CODE"]
 
