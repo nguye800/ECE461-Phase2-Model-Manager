@@ -203,7 +203,7 @@ def _handle_post_regex(event: dict) -> dict:
 
     # Normalize unicode
     pattern = unicodedata.normalize("NFC", pattern)
-    
+
     if not isinstance(pattern, str) or not pattern.strip():
         return _error_response(400, "`regex` is required for regex search", log_prefix=log_prefix)
 
@@ -554,15 +554,26 @@ class ArtifactRepository:
         total_needed: int,
         start_key: dict[str, Any] | None = None,
     ) -> tuple[list[dict], dict[str, Any] | None]:
-        def predicate(item: dict) -> bool:
-            haystacks = []
-            for field in ("name_lc", "name", "readme_text"):
-                v = item.get(field)
-                haystacks.append(v if isinstance(v, str) else "")
-            return any(pattern.search(text) for text in haystacks)
+        MAX_HAYSTACK_CHARS = 4096  # defensive limit to avoid catastrophic backtracking
 
+        def predicate(item: dict) -> bool:
+            # Only run regex on a bounded prefix of each string field
+            for field in ("name_lc", "name", "readme_text"):
+                value = item.get(field)
+                if not isinstance(value, str):
+                    continue
+                text = value[:MAX_HAYSTACK_CHARS]
+                try:
+                    if pattern.search(text):
+                        return True
+                except RuntimeError:
+                    # Defensive: if the regex blows up internally, treat as "no match"
+                    return False
+            return False
 
         return self._scan_models(total_needed, start_key, predicate)
+
+
 
     def _scan_models(
         self,
