@@ -32,6 +32,10 @@ from urllib.parse import unquote_plus
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
+try:  # pragma: no cover - optional dependency loaded at runtime
+    import regex as _timeout_regex
+except ImportError:  # pragma: no cover - fallback for local tooling
+    _timeout_regex = None
 
 _DDB_ARTIFACT_TYPES = ["MODEL", "DATASET", "CODE"]
 
@@ -41,10 +45,28 @@ DEFAULT_TABLE_NAME = os.environ.get("MODEL_REGISTRY_TABLE", "model_registry")
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 SCAN_BATCH_SIZE = 50
+REGEX_TIMEOUT_SECONDS = float(os.environ.get("REGEX_TIMEOUT_SECONDS", "0.1"))
+MAX_REGEX_PATTERN_LENGTH = int(os.environ.get("MAX_REGEX_PATTERN_LENGTH", "512"))
+
+if _timeout_regex is not None:  # pragma: no cover - optional dependency path
+    _REGEX_ENGINE = _timeout_regex
+    _REGEX_COMPILE_ERRORS: tuple[type[Exception], ...] = (
+        re.error,
+        _timeout_regex.error,
+    )
+    _REGEX_TIMEOUT_EXCEPTION_TYPE: type[Exception] | None = _timeout_regex.TimeoutError
+else:  # pragma: no cover - fallback path
+    _REGEX_ENGINE = re
+    _REGEX_COMPILE_ERRORS = (re.error,)
+    _REGEX_TIMEOUT_EXCEPTION_TYPE = None
 
 
 class RepositoryError(RuntimeError):
     """Raised when the backing artifact repository cannot be queried."""
+
+
+class RegexEvaluationTimeout(RuntimeError):
+    """Raised when the regex engine exceeds the configured timeout."""
 
 
 @dataclass
@@ -198,9 +220,16 @@ def _handle_post_regex(event: dict) -> dict:
     if not isinstance(pattern, str) or not pattern.strip():
         return _error_response(400, "`regex` is required for regex search", log_prefix=log_prefix)
 
+    if len(pattern) > MAX_REGEX_PATTERN_LENGTH:
+        return _error_response(
+            400,
+            f"Regex exceeds maximum length of {MAX_REGEX_PATTERN_LENGTH} characters",
+            log_prefix=log_prefix,
+        )
+
     try:
-        compiled = re.compile(pattern, re.IGNORECASE)
-    except re.error as exc:
+        compiled = _compile_user_regex(pattern)
+    except _REGEX_COMPILE_ERRORS as exc:
         return _error_response(400, f"Invalid regular expression: {exc}", log_prefix=log_prefix)
 
     limit = _clamp_limit(
@@ -214,6 +243,12 @@ def _handle_post_regex(event: dict) -> dict:
     repo = _get_repository()
     try:
         artifacts, next_key = repo.regex_search(compiled, target, pagination.start_key)
+    except RegexEvaluationTimeout:
+        return _error_response(
+            400,
+            "Regex evaluation exceeded the safety timeout; please simplify your pattern.",
+            log_prefix=log_prefix,
+        )
     except RepositoryError as exc:
         LOGGER.error("Failed to run regex search: %s", exc)
         return _error_response(500, "Unable to execute regex search", log_prefix=log_prefix)
@@ -235,6 +270,19 @@ def _handle_post_regex(event: dict) -> dict:
 
 # -----------------------------------------------------------------------------
 # Helper utilities
+
+
+def _compile_user_regex(pattern: str):
+    """
+    Compile a user-provided regex with safety guards.
+    Falls back to the stdlib `re` module when the optional `regex` module is
+    unavailable.
+    """
+    flags = getattr(_REGEX_ENGINE, "IGNORECASE", re.IGNORECASE)
+    kwargs = {"flags": flags}
+    if _timeout_regex is not None:
+        kwargs["timeout"] = REGEX_TIMEOUT_SECONDS
+    return _REGEX_ENGINE.compile(pattern, **kwargs)
 
 
 def _parse_json_body(event: dict, *, expected_type: type | tuple[type, ...] = dict):
@@ -551,10 +599,15 @@ class ArtifactRepository:
                 item.get("name") or "",
                 item.get("readme_text") or "",
             ]
-            return any(
-                isinstance(text, str) and pattern.search(text)
-                for text in haystacks
-            )
+            try:
+                return any(
+                    isinstance(text, str) and pattern.search(text)
+                    for text in haystacks
+                )
+            except Exception as exc:  # pragma: no cover - defensive path
+                if _REGEX_TIMEOUT_EXCEPTION_TYPE and isinstance(exc, _REGEX_TIMEOUT_EXCEPTION_TYPE):
+                    raise RegexEvaluationTimeout("Regex evaluation timed out") from exc
+                raise
 
         return self._scan_models(total_needed, start_key, predicate)
 

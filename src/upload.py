@@ -1226,22 +1226,10 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
     else:
         LOGGER.info("No dataset reference detected for model %s", request.model_id)
 
-    # Code references are notoriously absent or noisy in READMEs, so we defer
-    # code discovery until a repository is explicitly uploaded and simply seed
-    # the pending dependency with the model name (plus any URL hint we saw).
-    if not request.metadata.get("codebase", {}).get("url") and not request.code_repository:
-        pending["code"] = {
-            "name": request.metadata.get("name") or request.model_id,
-            "url": findings.get("code_url"),
-        }
-        LOGGER.info(
-            "Model %s is waiting for code repository name=%s url=%s",
-            request.model_id,
-            pending["code"]["name"],
-            findings.get("code_url"),
-        )
-    else:
-        LOGGER.info("Model %s already has a codebase reference", request.model_id)
+    LOGGER.info(
+        "Code repositories for model %s will be linked when matching uploads are ingested",
+        request.model_id,
+    )
 
 
 def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
@@ -1414,45 +1402,46 @@ def _query_artifact_by_name(table, artifact_type: str, name: str) -> Optional[Di
 
 
 def _process_dependency_resolution(artifact_type: str, artifact_record: Dict[str, Any]) -> None:
-    if artifact_type not in {"dataset", "code"}:
-        return
-    dependency_key = "dataset" if artifact_type == "dataset" else "code"
-    dependency_url = artifact_record.get("model_url")
-    dependency_name = (
-        artifact_record.get("name")
-        or artifact_record.get("metadata", {}).get("name")
-        or artifact_record.get("model_id")
-    )
-    dependency_alias = artifact_record.get("metadata", {}).get("name") or artifact_record.get("name")
-    table = _get_artifacts_table()
-    pending_models = _find_models_waiting_on_dependency(
-        table, dependency_key, dependency_name, dependency_url, dependency_alias
-    )
-    for model_item in pending_models:
-        updated = _apply_dependency_to_model(
-            model_item, dependency_key, artifact_record, dependency_name, dependency_url
+    if artifact_type == "dataset":
+        dependency_key = "dataset"
+        dependency_url = artifact_record.get("model_url")
+        dependency_name = (
+            artifact_record.get("name")
+            or artifact_record.get("metadata", {}).get("name")
+            or artifact_record.get("model_id")
         )
-        if not updated:
-            continue
-        try:
-            _put_item(table, updated)
-            LOGGER.info(
-                "Resolved pending %s dependency for model %s using artifact %s",
-                dependency_key,
-                updated.get("model_id"),
-                dependency_name or dependency_url,
+        dependency_alias = artifact_record.get("metadata", {}).get("name") or artifact_record.get("name")
+        table = _get_artifacts_table()
+        pending_models = _find_models_waiting_on_dependency(
+            table, dependency_key, dependency_name, dependency_url, dependency_alias
+        )
+        for model_item in pending_models:
+            updated = _apply_dependency_to_model(
+                model_item, dependency_key, artifact_record, dependency_name, dependency_url
             )
-        except ClientError as exc:
-            LOGGER.warning(
-                "Failed to update model %s while resolving %s dependency: %s",
-                updated.get("model_id"),
-                dependency_key,
-                exc,
-            )
-            continue
-        scoring_urls = _collect_scoring_urls(updated)
-        if scoring_urls:
-            _enqueue_scoring_job(updated["model_id"], scoring_urls)
+            if not updated:
+                continue
+            try:
+                _put_item(table, updated)
+                LOGGER.info(
+                    "Resolved pending dataset dependency for model %s using artifact %s",
+                    updated.get("model_id"),
+                    dependency_name or dependency_url,
+                )
+            except ClientError as exc:
+                LOGGER.warning(
+                    "Failed to update model %s while resolving dataset dependency: %s",
+                    updated.get("model_id"),
+                    exc,
+                )
+                continue
+            scoring_urls = _collect_scoring_urls(updated)
+            if scoring_urls:
+                _enqueue_scoring_job(updated["model_id"], scoring_urls)
+        return
+
+    if artifact_type == "code":
+        _associate_code_with_models(artifact_record)
 
 
 def _find_models_waiting_on_dependency(
@@ -1480,6 +1469,67 @@ def _find_models_waiting_on_dependency(
     return items
 
 
+def _associate_code_with_models(artifact_record: Dict[str, Any]) -> None:
+    """
+    Link an uploaded code artifact to models that lack a codebase and whose
+    names loosely match the uploaded repository name.
+    """
+    code_name = (
+        artifact_record.get("name")
+        or artifact_record.get("metadata", {}).get("name")
+        or artifact_record.get("model_id")
+    )
+    code_url = artifact_record.get("model_url")
+    if not code_name and not code_url:
+        LOGGER.debug("Skipping code association; missing code artifact identifiers.")
+        return
+
+    table = _get_artifacts_table()
+    scan_kwargs: Dict[str, Any] = {"FilterExpression": Attr("type").eq("MODEL")}
+    while True:
+        response = table.scan(**scan_kwargs)
+        for model_item in response.get("Items", []):
+            code_block = model_item.get("codebase") or {}
+            if code_block.get("url"):
+                continue
+            model_name = (
+                model_item.get("name")
+                or model_item.get("metadata", {}).get("name")
+                or model_item.get("model_id")
+            )
+            if not model_name:
+                continue
+            if not _names_fuzzy_match(model_name, code_name):
+                continue
+
+            updated = _apply_codebase_match(model_item, artifact_record, code_name, code_url)
+            if not updated:
+                continue
+            try:
+                _put_item(table, updated)
+                LOGGER.info(
+                    "Linked code artifact %s to model %s via name match",
+                    code_name,
+                    updated.get("model_id"),
+                )
+            except ClientError as exc:
+                LOGGER.warning(
+                    "Failed to update model %s while linking code repository: %s",
+                    updated.get("model_id"),
+                    exc,
+                )
+                continue
+
+            scoring_urls = _collect_scoring_urls(updated)
+            if scoring_urls:
+                _enqueue_scoring_job(updated["model_id"], scoring_urls)
+
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        scan_kwargs["ExclusiveStartKey"] = last_key
+
+
 def _dependency_matches(
     pending_entry: Dict[str, Any],
     dependency_name: Optional[str],
@@ -1496,6 +1546,48 @@ def _dependency_matches(
         if dependency_alias and _names_fuzzy_match(pending_name, dependency_alias):
             return True
     return False
+
+
+def _apply_codebase_match(
+    model_item: Dict[str, Any],
+    code_record: Dict[str, Any],
+    code_name: Optional[str],
+    code_url: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """
+    Populate the model's codebase block using the uploaded code artifact.
+    """
+    code_block = model_item.get("codebase") or {}
+    if code_block.get("url"):
+        return None
+
+    if code_name:
+        code_block.setdefault("name", code_name)
+    if code_url:
+        code_block["url"] = code_url
+    code_block["artifact_id"] = code_record.get("model_id")
+    code_block["updated_at"] = datetime.now(timezone.utc).isoformat()
+    model_item["codebase"] = code_block
+
+    pending = model_item.get("pending_dependencies") or {}
+    if "code" in pending:
+        pending.pop("code", None)
+        if pending:
+            model_item["pending_dependencies"] = pending
+        else:
+            model_item.pop("pending_dependencies", None)
+
+    metadata_block = model_item.get("metadata") or {}
+    metadata_pending = metadata_block.get("pending_dependencies")
+    if isinstance(metadata_pending, dict):
+        metadata_pending.pop("code", None)
+        if metadata_pending:
+            metadata_block["pending_dependencies"] = metadata_pending
+        else:
+            metadata_block.pop("pending_dependencies", None)
+
+    model_item["updated_at"] = datetime.now(timezone.utc).isoformat()
+    return model_item
 
 
 def _normalize_str(value: Optional[str]) -> Optional[str]:
