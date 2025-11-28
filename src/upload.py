@@ -67,6 +67,9 @@ HUGGINGFACE_DATASET_PATTERN = re.compile(
 GITHUB_REPO_PATTERN = re.compile(
     r"(https?://github\.com/[\w\-.]+/[\w\-.]+)"
 )
+HUGGINGFACE_MODEL_URL_PATTERN = re.compile(
+    r"(https?://huggingface\.co/(?!datasets/)[\w\-.]+/[\w\-.]+)"
+)
 KNOWN_DATASET_ALIASES = {
     "imagenet": "ILSVRC/imagenet-1k",
     "imagenet-1k": "ILSVRC/imagenet-1k",
@@ -756,11 +759,11 @@ def _is_valid_url(value: Optional[str]) -> bool:
 def _model_ready_for_scoring(
     model_url: Optional[str], codebase_url: Optional[str], dataset_url: Optional[str]
 ) -> bool:
-    """A model is ready for scoring when URLs for model, code, and data exist."""
-    return all(_is_valid_url(url) for url in (model_url, codebase_url, dataset_url))
+    """A model is ready for scoring when at least the model URL exists."""
+    return _is_valid_url(model_url)
 
 
-def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest] = None) -> Optional[Dict[str, str]]:
+def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest] = None) -> Optional[Dict[str, Optional[str]]]:
     dataset = item.get("dataset") or {}
     codebase = item.get("codebase") or {}
     model_url = item.get("model_url") or (request.model_url if request else None)
@@ -770,13 +773,13 @@ def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest]
         codebase_url = codebase_url or _resolve_codebase_url(request)
         dataset_url = dataset_url or _resolve_dataset_url(request)
 
-    if _model_ready_for_scoring(model_url, codebase_url, dataset_url):
-        return {
-            "model_url": model_url,
-            "codebase_url": codebase_url,
-            "dataset_url": dataset_url,
-        }
-    return None
+    if not _model_ready_for_scoring(model_url, codebase_url, dataset_url):
+        return None
+    return {
+        "model_url": model_url,
+        "codebase_url": codebase_url if _is_valid_url(codebase_url) else None,
+        "dataset_url": dataset_url if _is_valid_url(dataset_url) else None,
+    }
 
 
 def _enqueue_scoring_job(model_id: str, urls: Dict[str, str]) -> bool:
@@ -1241,6 +1244,78 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             }
 
 
+def _discover_models_for_codebase(request: UploadRequest) -> None:
+    code_url = _resolve_codebase_url(request) or request.model_url
+    if not code_url or "github.com" not in code_url:
+        return
+    readme_text = _fetch_github_repo_readme(code_url)
+    if not readme_text:
+        LOGGER.debug("No README detected for code %s; skipping code discovery.", request.model_id)
+        return
+
+    model_urls = _extract_model_urls_from_text(readme_text)
+    dataset_candidates = _build_dataset_candidates_from_text(readme_text)
+    if not model_urls:
+        LOGGER.debug("Code %s README did not reference any Hugging Face models.", request.model_id)
+        return
+
+    table = _get_artifacts_table()
+    code_name = request.metadata.get("name") or request.model_id
+    updated_models = 0
+    for model_url in model_urls:
+        model_entry = _scan_artifact_by_url(table, "model", model_url)
+        if not model_entry:
+            continue
+        updated = False
+        code_block = model_entry.get("codebase") or {}
+        if not code_block.get("url"):
+            code_block["url"] = code_url
+            code_block.setdefault("name", code_name)
+            model_entry["codebase"] = code_block
+            updated = True
+
+        if dataset_candidates:
+            current_dataset = model_entry.get("dataset") or {}
+            if not current_dataset.get("url"):
+                dataset_entry = _resolve_dataset_candidate(table, dataset_candidates)
+                if dataset_entry:
+                    dataset_url = dataset_entry.get("model_url") or dataset_entry.get("dataset", {}).get("url")
+                    dataset_name = dataset_entry.get("name") or dataset_entry.get("metadata", {}).get("name")
+                    resolved = {}
+                    if dataset_url:
+                        resolved["url"] = dataset_url
+                    if dataset_name:
+                        resolved["name"] = dataset_name
+                    if resolved:
+                        model_entry["dataset"] = resolved
+                        updated = True
+                else:
+                    candidate = dataset_candidates[0]
+                    pending = model_entry.get("pending_dependencies") or {}
+                    pending["dataset"] = {
+                        "name": candidate.get("name"),
+                        "url": candidate.get("url"),
+                    }
+                    model_entry["pending_dependencies"] = pending
+                    updated = True
+
+        if updated:
+            model_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+            try:
+                _put_item(table, model_entry)
+                updated_models += 1
+            except Exception as exc:
+                LOGGER.warning(
+                    "Failed to update model %s with code reference %s: %s",
+                    model_entry.get("model_id"),
+                    request.model_id,
+                    exc,
+                )
+
+    if updated_models:
+        LOGGER.info("Linked codebase %s to %s model(s).", request.model_id, updated_models)
+
+
 def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
     if not model_url:
         return None
@@ -1252,6 +1327,42 @@ def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
         if text:
             return text
     return None
+
+
+def _fetch_github_repo_readme(repo_url: Optional[str]) -> Optional[str]:
+    if not repo_url:
+        return None
+    owner, repo, branch = _extract_github_repo_segments(repo_url)
+    if not owner or not repo:
+        return None
+    branches = [branch, "main", "master"]
+    filenames = ["README.md", "README.MD", "Readme.md"]
+    for candidate_branch in [b for b in branches if b]:
+        for filename in filenames:
+            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{candidate_branch}/{filename}"
+            text = _safe_http_get(raw_url)
+            if text:
+                return text
+    return None
+
+
+def _extract_github_repo_segments(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None, None, None
+    if "github.com" not in (parsed.netloc or "").lower():
+        return None, None, None
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if len(segments) < 2:
+        return None, None, None
+    owner, repo = segments[0], segments[1]
+    branch = None
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    if len(segments) >= 4 and segments[2] == "tree":
+        branch = segments[3]
+    return owner, repo, branch
 
 
 def _extract_hf_repo_segments(url: str) -> Tuple[Optional[str], Optional[str]]:
@@ -1356,6 +1467,53 @@ def _heuristic_related_entities(text: str) -> Dict[str, Optional[str]]:
         "code_url": code_url,
         "code_name": _infer_name_from_url(code_url) if code_url else None,
     }
+
+
+def _extract_model_urls_from_text(text: Optional[str]) -> List[str]:
+    if not text:
+        return []
+    matches = HUGGINGFACE_MODEL_URL_PATTERN.findall(text)
+    unique: List[str] = []
+    seen = set()
+    for match in matches:
+        normalized = match.rstrip("/").lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(match.rstrip("/"))
+    return unique
+
+
+def _build_dataset_candidates_from_text(text: Optional[str]) -> List[Dict[str, Optional[str]]]:
+    if not text:
+        return []
+    candidates: List[Dict[str, Optional[str]]] = []
+    for url in HUGGINGFACE_DATASET_PATTERN.findall(text):
+        candidate = _canonical_dataset_candidate(None, url)
+        if candidate:
+            candidates.append(candidate)
+    for alias in _extract_dataset_mentions_from_text(text):
+        candidate = _canonical_dataset_candidate(alias, None)
+        if candidate:
+            candidates.append(candidate)
+    return _dedupe_candidates(candidates)
+
+
+def _resolve_dataset_candidate(
+    table,
+    candidates: List[Dict[str, Optional[str]]],
+) -> Optional[Dict[str, Any]]:
+    for candidate in candidates:
+        url = candidate.get("url")
+        name = candidate.get("name")
+        entry = None
+        if url:
+            entry = _scan_artifact_by_url(table, "dataset", url)
+        if not entry and name:
+            entry = _query_artifact_by_name(table, "dataset", name)
+        if entry:
+            return entry
+    return None
 
 
 def _fetch_hf_model_metadata(model_url: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -1893,6 +2051,15 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             except Exception as exc:
                 LOGGER.warning(
                     "Automatic related-resource discovery failed for %s: %s",
+                    request.model_id,
+                    exc,
+                )
+        elif artifact_type == "code":
+            try:
+                _discover_models_for_codebase(request)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Codebase discovery failed for %s: %s",
                     request.model_id,
                     exc,
                 )
