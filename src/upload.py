@@ -220,11 +220,10 @@ def _identify_spec_operation(event: Dict[str, Any]) -> Optional[Tuple[str, str, 
     path_params = event.get("pathParameters") or {}
     path = _extract_path(event)
     segments = _parse_path_segments(path)
-    artifact_prefixes = {"artifact", "artifacts"}
 
     if method == "POST":
         artifact_type = path_params.get("artifact_type")
-        if not artifact_type and len(segments) >= 2 and segments[0] in artifact_prefixes:
+        if not artifact_type and len(segments) >= 2 and segments[0] == "artifact":
             artifact_type = segments[1]
         if artifact_type:
             return ("create", artifact_type, None)
@@ -232,7 +231,7 @@ def _identify_spec_operation(event: Dict[str, Any]) -> Optional[Tuple[str, str, 
     if method == "PUT":
         artifact_type = path_params.get("artifact_type")
         artifact_id = path_params.get("id") or path_params.get("artifact_id")
-        if (not artifact_type or not artifact_id) and len(segments) >= 3 and segments[0] in artifact_prefixes:
+        if (not artifact_type or not artifact_id) and len(segments) >= 3 and segments[0] == "artifacts":
             artifact_type = artifact_type or segments[1]
             artifact_id = artifact_id or segments[2]
         if artifact_type and artifact_id:
@@ -520,23 +519,6 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
     now = datetime.now(timezone.utc).isoformat()
     download_url = _build_download_url(bucket_name, object_key)
 
-    metadata_block = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-    request = None
-    if artifact_type == "model":
-        # Reuse the same discovery flow as the legacy uploader so spec uploads
-        # can infer datasets/codebases and queue scoring immediately when possible.
-        request = UploadRequest(
-            model_id=artifact_id,
-            model_url=source_url,
-            metadata=metadata_block.copy(),
-            artifacts=[],
-        )
-        try:
-            _discover_related_resources_for_model(request)
-        except Exception as exc:
-            LOGGER.warning("Spec create autodiscovery failed for %s: %s", artifact_id, exc)
-        metadata_block = request.metadata
-
     item = _build_spec_registry_item(
         artifact_type,
         artifact_id,
@@ -549,15 +531,6 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
         size_bytes,
         checksum,
     )
-    if metadata_block:
-        item["metadata"].update(metadata_block)
-    if artifact_type == "model":
-        if metadata_block.get("dataset"):
-            item["dataset"] = metadata_block["dataset"]
-        if metadata_block.get("codebase"):
-            item["codebase"] = metadata_block["codebase"]
-        if metadata_block.get("pending_dependencies"):
-            item["pending_dependencies"] = metadata_block["pending_dependencies"]
     item["created_at"] = now
     item["updated_at"] = now
     item.setdefault("audits", [])
@@ -570,12 +543,12 @@ def _handle_spec_artifact_create(event: Dict[str, Any], artifact_type_raw: str) 
 
     _put_item(table, item)
     _process_dependency_resolution(artifact_type, item)
-    scoring_context = _gather_scoring_context(item, request)
-    if artifact_type == "model" and scoring_context.get("model_url"):
+    scoring_urls = _collect_scoring_urls(item)
+    if scoring_urls:
         LOGGER.info(
-            "Enqueuing scoring job for new %s artifact %s", artifact_type, artifact_id
+            "Enqueuing scoring job for new %s artifact %s (all URLs present)", artifact_type, artifact_id
         )
-        _enqueue_scoring_job(artifact_id, scoring_context, reason="artifact_create")
+        _enqueue_scoring_job(artifact_id, scoring_urls)
     print(
         f"[upload.spec.create] Completed creation for {artifact_type}/{artifact_id}",
         flush=True,
@@ -700,11 +673,9 @@ def _handle_spec_artifact_update(
         user=_resolve_request_user(payload),
     )
     _put_item(table, updated_item)
-    scoring_context = _gather_scoring_context(updated_item)
-    if artifact_type == "model" and scoring_context.get("model_url"):
-        _enqueue_scoring_job(
-            artifact_id, scoring_context, reason="artifact_update"
-        )
+    scoring_urls = _collect_scoring_urls(updated_item)
+    if scoring_urls:
+        _enqueue_scoring_job(artifact_id, scoring_urls)
     print(
         f"[upload.spec.update] Completed update for {artifact_type}/{artifact_id}",
         flush=True,
@@ -772,9 +743,14 @@ def _is_valid_url(value: Optional[str]) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def _gather_scoring_context(
-    item: Dict[str, Any], request: Optional[UploadRequest] = None
-) -> Dict[str, Optional[str]]:
+def _model_ready_for_scoring(
+    model_url: Optional[str], codebase_url: Optional[str], dataset_url: Optional[str]
+) -> bool:
+    """A model is ready for scoring when URLs for model, code, and data exist."""
+    return all(_is_valid_url(url) for url in (model_url, codebase_url, dataset_url))
+
+
+def _collect_scoring_urls(item: Dict[str, Any], request: Optional[UploadRequest] = None) -> Optional[Dict[str, str]]:
     dataset = item.get("dataset") or {}
     codebase = item.get("codebase") or {}
     model_url = item.get("model_url") or (request.model_url if request else None)
@@ -783,16 +759,17 @@ def _gather_scoring_context(
     if request:
         codebase_url = codebase_url or _resolve_codebase_url(request)
         dataset_url = dataset_url or _resolve_dataset_url(request)
-    return {
-        "model_url": model_url,
-        "codebase_url": codebase_url,
-        "dataset_url": dataset_url,
-    }
+
+    if _model_ready_for_scoring(model_url, codebase_url, dataset_url):
+        return {
+            "model_url": model_url,
+            "codebase_url": codebase_url,
+            "dataset_url": dataset_url,
+        }
+    return None
 
 
-def _enqueue_scoring_job(
-    model_id: str, urls: Optional[Dict[str, Optional[str]]] = None, *, reason: Optional[str] = None
-) -> bool:
+def _enqueue_scoring_job(model_id: str, urls: Dict[str, str]) -> bool:
     """
     Enqueue a scoring job on SQS. Returns True when a message was queued.
     """
@@ -801,15 +778,15 @@ def _enqueue_scoring_job(
         LOGGER.debug("SCORING_QUEUE_URL not set; skipping scoring enqueue.")
         return False
 
-    payload: Dict[str, Any] = {
-        "model_id": model_id,
-        "queued_at": datetime.utcnow().isoformat(),
-    }
-    if urls:
-        payload["urls"] = urls
-    if reason:
-        payload["reason"] = reason
-    message_body = json.dumps(payload)
+    message_body = json.dumps(
+        {
+            "model_id": model_id,
+            "model_url": urls["model_url"],
+            "codebase_url": urls["codebase_url"],
+            "dataset_url": urls["dataset_url"],
+            "queued_at": datetime.utcnow().isoformat(),
+        }
+    )
 
     try:
         sqs_client = _get_sqs_client()
@@ -833,7 +810,7 @@ def _enqueue_scoring_job(
 def _extract_artifact_type(event: Dict[str, Any]) -> str:
     path = event.get("rawPath") or event.get("path", "")
     segments = [segment for segment in path.strip("/").split("/") if segment]
-    if len(segments) >= 2 and segments[0] in {"artifact", "artifacts"}:
+    if len(segments) >= 2 and segments[0] == "artifact":
         return segments[1].lower()
     path_params = event.get("pathParameters") or {}
     return (path_params.get("artifact_type") or "model").lower()
@@ -890,7 +867,7 @@ _METRIC_BREAKDOWN_KEYS = [
     "performance_claims",
     "license",
     "size_score",
-    "dataset_and_code_score",
+    "dataset_and_code",
     "dataset_quality",
     "code_quality",
     "reproducibility",
@@ -951,19 +928,7 @@ def _serialize_item_for_dynamo(item: Dict[str, Any]) -> Dict[str, Any]:
     serialized = _DYNAMODB_SERIALIZER.serialize(prepared)
     if "M" not in serialized:
         raise UploadError("Serialized Dynamo item must be a map representation.")
-    attributes = serialized["M"]
-
-    pk_field = os.getenv("RATE_PK_FIELD", "pk")
-    sk_field = os.getenv("RATE_SK_FIELD", "sk")
-    for field in (pk_field, sk_field):
-        if not field:
-            continue
-        value = prepared.get(field)
-        if value is None:
-            continue
-        attributes[field] = {"S": str(value)}
-
-    return attributes
+    return serialized["M"]
 
 
 def _put_item(table, item: Dict[str, Any]) -> None:
@@ -1226,19 +1191,36 @@ def _discover_related_resources_for_model(request: UploadRequest) -> None:
             "name": findings.get("dataset_name"),
             "url": findings.get("dataset_url"),
         }
-        LOGGER.info(
-            "Model %s is waiting for dataset name=%s url=%s",
-            request.model_id,
-            findings.get("dataset_name"),
-            findings.get("dataset_url"),
-        )
-    else:
-        LOGGER.info("No dataset reference detected for model %s", request.model_id)
 
-    LOGGER.info(
-        "Code repositories for model %s will be linked when matching uploads are ingested",
+    code_names = [
+        findings.get("code_name"),
+        request.metadata.get("name"),
         request.model_id,
+    ]
+    code_entry = _lookup_artifact_entry(
+        "code",
+        names=code_names,
+        urls=[findings.get("code_url")],
     )
+    if code_entry:
+        code_url = code_entry.get("model_url") or code_entry.get("codebase", {}).get("url")
+        code_name = code_entry.get("name") or code_entry.get("metadata", {}).get("name")
+        if code_url:
+            request.code_repository = code_url
+            request.metadata.setdefault("codebase", {}).setdefault("url", code_url)
+        if code_name:
+            request.metadata.setdefault("codebase", {}).setdefault("name", code_name)
+        LOGGER.info(
+            "Autodiscovered codebase %s for model %s",
+            code_name or code_url,
+            request.model_id,
+        )
+    elif findings.get("code_name") or findings.get("code_url"):
+        # Same deferred flow for code when nothing exists yet.
+        pending["code"] = {
+            "name": findings.get("code_name"),
+            "url": findings.get("code_url"),
+        }
 
 
 def _fetch_hf_model_readme(model_url: Optional[str]) -> Optional[str]:
@@ -1411,48 +1393,43 @@ def _query_artifact_by_name(table, artifact_type: str, name: str) -> Optional[Di
 
 
 def _process_dependency_resolution(artifact_type: str, artifact_record: Dict[str, Any]) -> None:
-    if artifact_type == "dataset":
-        dependency_key = "dataset"
-        dependency_url = artifact_record.get("model_url")
-        dependency_name = (
-            artifact_record.get("name")
-            or artifact_record.get("metadata", {}).get("name")
-            or artifact_record.get("model_id")
-        )
-        dependency_alias = artifact_record.get("metadata", {}).get("name") or artifact_record.get("name")
-        table = _get_artifacts_table()
-        pending_models = _find_models_waiting_on_dependency(
-            table, dependency_key, dependency_name, dependency_url, dependency_alias
-        )
-        for model_item in pending_models:
-            updated = _apply_dependency_to_model(
-                model_item, dependency_key, artifact_record, dependency_name, dependency_url
-            )
-            if not updated:
-                continue
-            try:
-                _put_item(table, updated)
-                LOGGER.info(
-                    "Resolved pending dataset dependency for model %s using artifact %s",
-                    updated.get("model_id"),
-                    dependency_name or dependency_url,
-                )
-            except ClientError as exc:
-                LOGGER.warning(
-                    "Failed to update model %s while resolving dataset dependency: %s",
-                    updated.get("model_id"),
-                    exc,
-                )
-                continue
-            scoring_context = _gather_scoring_context(updated)
-            if scoring_context.get("model_url"):
-                _enqueue_scoring_job(
-                    updated["model_id"], scoring_context, reason="dependency_dataset_linked"
-                )
+    if artifact_type not in {"dataset", "code"}:
         return
-
-    if artifact_type == "code":
-        _associate_code_with_models(artifact_record)
+    dependency_key = "dataset" if artifact_type == "dataset" else "code"
+    dependency_url = artifact_record.get("model_url")
+    dependency_name = (
+        artifact_record.get("name")
+        or artifact_record.get("metadata", {}).get("name")
+        or artifact_record.get("model_id")
+    )
+    table = _get_artifacts_table()
+    pending_models = _find_models_waiting_on_dependency(
+        table, dependency_key, dependency_name, dependency_url
+    )
+    for model_item in pending_models:
+        updated = _apply_dependency_to_model(
+            model_item, dependency_key, artifact_record, dependency_name, dependency_url
+        )
+        if not updated:
+            continue
+        try:
+            _put_item(table, updated)
+            LOGGER.info(
+                "Resolved pending %s dependency for model %s",
+                dependency_key,
+                updated.get("model_id"),
+            )
+        except ClientError as exc:
+            LOGGER.warning(
+                "Failed to update model %s while resolving %s dependency: %s",
+                updated.get("model_id"),
+                dependency_key,
+                exc,
+            )
+            continue
+        scoring_urls = _collect_scoring_urls(updated)
+        if scoring_urls:
+            _enqueue_scoring_job(updated["model_id"], scoring_urls)
 
 
 def _find_models_waiting_on_dependency(
@@ -1460,7 +1437,6 @@ def _find_models_waiting_on_dependency(
     dependency_key: str,
     dependency_name: Optional[str],
     dependency_url: Optional[str],
-    dependency_alias: Optional[str],
 ) -> List[Dict[str, Any]]:
     filter_expression = Attr("type").eq("MODEL") & Attr("pending_dependencies").exists()
     items: List[Dict[str, Any]] = []
@@ -1471,7 +1447,7 @@ def _find_models_waiting_on_dependency(
             pending = (item.get("pending_dependencies") or {}).get(dependency_key)
             if not pending:
                 continue
-            if _dependency_matches(pending, dependency_name, dependency_url, dependency_alias):
+            if _dependency_matches(pending, dependency_name, dependency_url):
                 items.append(item)
         last_key = response.get("LastEvaluatedKey")
         if not last_key:
@@ -1480,147 +1456,24 @@ def _find_models_waiting_on_dependency(
     return items
 
 
-def _associate_code_with_models(artifact_record: Dict[str, Any]) -> None:
-    """
-    Link an uploaded code artifact to models that lack a codebase and whose
-    names loosely match the uploaded repository name.
-    """
-    code_name = (
-        artifact_record.get("name")
-        or artifact_record.get("metadata", {}).get("name")
-        or artifact_record.get("model_id")
-    )
-    code_url = artifact_record.get("model_url")
-    if not code_name and not code_url:
-        LOGGER.debug("Skipping code association; missing code artifact identifiers.")
-        return
-
-    table = _get_artifacts_table()
-    scan_kwargs: Dict[str, Any] = {"FilterExpression": Attr("type").eq("MODEL")}
-    while True:
-        response = table.scan(**scan_kwargs)
-        for model_item in response.get("Items", []):
-            code_block = model_item.get("codebase") or {}
-            if code_block.get("url"):
-                continue
-            model_name = (
-                model_item.get("name")
-                or model_item.get("metadata", {}).get("name")
-                or model_item.get("model_id")
-            )
-            if not model_name:
-                continue
-            if not _names_fuzzy_match(model_name, code_name):
-                continue
-
-            updated = _apply_codebase_match(model_item, artifact_record, code_name, code_url)
-            if not updated:
-                continue
-            try:
-                _put_item(table, updated)
-                LOGGER.info(
-                    "Linked code artifact %s to model %s via name match",
-                    code_name,
-                    updated.get("model_id"),
-                )
-            except ClientError as exc:
-                LOGGER.warning(
-                    "Failed to update model %s while linking code repository: %s",
-                    updated.get("model_id"),
-                    exc,
-                )
-                continue
-
-            scoring_context = _gather_scoring_context(updated)
-            if scoring_context.get("model_url"):
-                _enqueue_scoring_job(
-                    updated["model_id"], scoring_context, reason="dependency_code_linked"
-                )
-
-        last_key = response.get("LastEvaluatedKey")
-        if not last_key:
-            break
-        scan_kwargs["ExclusiveStartKey"] = last_key
-
-
 def _dependency_matches(
     pending_entry: Dict[str, Any],
     dependency_name: Optional[str],
     dependency_url: Optional[str],
-    dependency_alias: Optional[str] = None,
 ) -> bool:
     pending_url = pending_entry.get("url")
     pending_name = pending_entry.get("name")
     if pending_url and dependency_url and _normalize_str(pending_url) == _normalize_str(dependency_url):
         return True
-    if pending_name:
-        if dependency_name and _names_fuzzy_match(pending_name, dependency_name):
-            return True
-        if dependency_alias and _names_fuzzy_match(pending_name, dependency_alias):
-            return True
+    if pending_name and dependency_name and _normalize_str(pending_name) == _normalize_str(dependency_name):
+        return True
     return False
-
-
-def _apply_codebase_match(
-    model_item: Dict[str, Any],
-    code_record: Dict[str, Any],
-    code_name: Optional[str],
-    code_url: Optional[str],
-) -> Optional[Dict[str, Any]]:
-    """
-    Populate the model's codebase block using the uploaded code artifact.
-    """
-    code_block = model_item.get("codebase") or {}
-    if code_block.get("url"):
-        return None
-
-    if code_name:
-        code_block.setdefault("name", code_name)
-    if code_url:
-        code_block["url"] = code_url
-    code_block["artifact_id"] = code_record.get("model_id")
-    code_block["updated_at"] = datetime.now(timezone.utc).isoformat()
-    model_item["codebase"] = code_block
-
-    pending = model_item.get("pending_dependencies") or {}
-    if "code" in pending:
-        pending.pop("code", None)
-        if pending:
-            model_item["pending_dependencies"] = pending
-        else:
-            model_item.pop("pending_dependencies", None)
-
-    metadata_block = model_item.get("metadata") or {}
-    metadata_pending = metadata_block.get("pending_dependencies")
-    if isinstance(metadata_pending, dict):
-        metadata_pending.pop("code", None)
-        if metadata_pending:
-            metadata_block["pending_dependencies"] = metadata_pending
-        else:
-            metadata_block.pop("pending_dependencies", None)
-
-    model_item["updated_at"] = datetime.now(timezone.utc).isoformat()
-    return model_item
 
 
 def _normalize_str(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
     return value.strip().lower()
-
-
-def _names_fuzzy_match(candidate: Optional[str], target: Optional[str]) -> bool:
-    norm_candidate = _normalize_name_for_matching(candidate)
-    norm_target = _normalize_name_for_matching(target)
-    if not norm_candidate or not norm_target:
-        return False
-    return norm_candidate in norm_target or norm_target in norm_candidate
-
-
-def _normalize_name_for_matching(value: Optional[str]) -> Optional[str]:
-    if not value:
-        return None
-    return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
 def _apply_dependency_to_model(
@@ -1659,14 +1512,6 @@ def _apply_dependency_to_model(
         model_item["pending_dependencies"] = pending
     else:
         model_item.pop("pending_dependencies", None)
-    metadata_block = model_item.get("metadata") or {}
-    metadata_pending = metadata_block.get("pending_dependencies")
-    if isinstance(metadata_pending, dict):
-        metadata_pending.pop(dependency_key, None)
-        if metadata_pending:
-            metadata_block["pending_dependencies"] = metadata_pending
-        else:
-            metadata_block.pop("pending_dependencies", None)
     model_item["updated_at"] = datetime.now(timezone.utc).isoformat()
     return model_item
 
@@ -1783,9 +1628,6 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     The function returns an API Gateway compatible response. Errors are surfaced
     with a 400-level status code (client issues) or 500-level (server issues).
     """
-    print(f"[upload.lambda] Raw event: {json.dumps(event)}", flush=True)
-    print(f"[upload.lambda] Context request_id={getattr(context, 'aws_request_id', None)}", flush=True)
-
     method = _extract_http_method(event)
     path = _extract_path(event)
     print(
@@ -1828,7 +1670,7 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         existing = _fetch_existing_item(table, key)
 
         item = _build_ddb_item(request, uploaded_artifacts, artifact_type, existing)
-        scoring_context = _gather_scoring_context(item, request)
+        scoring_urls = _collect_scoring_urls(item, request)
         try:
             _put_item(table, item)
         except ClientError as exc:
@@ -1841,10 +1683,8 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         action = "updated" if existing else "created"
 
         queued_scoring_job = False
-        if artifact_type == "model" and scoring_context.get("model_url"):
-            queued_scoring_job = _enqueue_scoring_job(
-                request.model_id, scoring_context, reason=f"{artifact_type}_{action}"
-            )
+        if scoring_urls:
+            queued_scoring_job = _enqueue_scoring_job(request.model_id, scoring_urls)
 
         response_body = {
             "status": "success",
