@@ -144,7 +144,7 @@ export function UploadTab({ token }: UploadTabProps) {
                 <SelectContent>
                   <SelectItem value="model">Model</SelectItem>
                   <SelectItem value="dataset">Dataset</SelectItem>
-                  <SelectItem value="codebase">Codebase</SelectItem>
+                  <SelectItem value="code">Code</SelectItem>
                 </SelectContent>
               </Select>
             </div>
