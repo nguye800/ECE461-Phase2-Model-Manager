@@ -6,12 +6,17 @@ import base64
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
 
-from rate import _build_openapi_response
+from rate import (
+    OPENAPI_METRIC_FIELDS,
+    _build_openapi_response,
+    _build_popularity_metric_entry,
+    _fetch_hf_popularity_stats,
+)
 
 LOG_LEVEL = os.getenv("RATE_LOG_LEVEL", "INFO").upper()
 logger = logging.getLogger(__name__)
@@ -75,9 +80,30 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
     eligibility = item.get("eligibility", {})
     metrics_blob = item.get("metrics") or {}
 
-    breakdown = metrics_blob.get("breakdown", {})
+    breakdown = metrics_blob.get("breakdown", {}) or {}
     net_score = float(metrics_blob.get("average", 0.0))
     net_score_latency = int(scoring.get("net_score_latency", 0))
+
+    fallback_needed = _detect_missing_metrics(breakdown)
+    if fallback_needed:
+        hf_stats = _fetch_hf_popularity_stats(item)
+        if hf_stats:
+            for metric_name in fallback_needed:
+                breakdown[metric_name] = _build_popularity_metric_entry(
+                    metric_name,
+                    hf_stats,
+                    reason="popularity_fallback_missing_metric",
+                )
+            metrics_blob["breakdown"] = breakdown
+            available_values = [
+                float(entry.get("value", 0.0))
+                for entry in breakdown.values()
+                if isinstance(entry, dict) and entry.get("available")
+            ]
+            if available_values:
+                net_score = sum(available_values) / len(available_values)
+                metrics_blob["average"] = net_score
+                net_score_latency = net_score_latency or 0
 
     response_payload = _build_openapi_response(
         item=item,
@@ -207,3 +233,22 @@ def _build_dynamo_key(model_id: str) -> Dict[str, str]:
         pk_field: f"{pk_prefix}{model_id}",
         sk_field: sk_value,
     }
+
+
+def _detect_missing_metrics(breakdown: Dict[str, Any]) -> List[str]:
+    missing: List[str] = []
+    for metric_name in OPENAPI_METRIC_FIELDS:
+        entry = breakdown.get(metric_name)
+        if not isinstance(entry, dict):
+            missing.append(metric_name)
+            continue
+        if not entry.get("available"):
+            missing.append(metric_name)
+            continue
+        try:
+            value = float(entry.get("value", 0.0))
+        except (TypeError, ValueError):
+            value = 0.0
+        if value <= 0.0:
+            missing.append(metric_name)
+    return missing
