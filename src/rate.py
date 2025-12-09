@@ -988,7 +988,8 @@ def _calculate_popularity_score(downloads: int, likes: int) -> float:
         (50000, None, 0.8, 0.9),
         (10000, 50000, 0.7, 0.8),
         (1000, 10000, 0.5, 0.7),
-        (0, 1000, 0.35, 0.5),
+        (100, 1000, 0.35, 0.5),
+        (0, 100, 0.1, 0.3),
     )
     likes_clamped = min(max(likes, 0), HF_LIKES_NORMALIZER)
     like_fraction = likes_clamped / HF_LIKES_NORMALIZER

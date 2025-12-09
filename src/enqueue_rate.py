@@ -13,9 +13,11 @@ from botocore.exceptions import ClientError
 
 from rate import (
     OPENAPI_METRIC_FIELDS,
+    RateException,
     _build_openapi_response,
     _build_popularity_metric_entry,
     _fetch_hf_popularity_stats,
+    _score_model,
 )
 
 LOG_LEVEL = os.getenv("RATE_LOG_LEVEL", "INFO").upper()
@@ -84,6 +86,17 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
     net_score = float(metrics_blob.get("average", 0.0))
     net_score_latency = int(scoring.get("net_score_latency", 0))
 
+    if _needs_rescore(scoring, metrics_blob, breakdown):
+        refreshed = _attempt_score_refresh(table, model_id)
+        if refreshed:
+            item = refreshed
+            scoring = item.get("scoring", {})
+            eligibility = item.get("eligibility", {})
+            metrics_blob = item.get("metrics") or {}
+            breakdown = metrics_blob.get("breakdown", {}) or {}
+            net_score = float(metrics_blob.get("average", 0.0))
+            net_score_latency = int(scoring.get("net_score_latency", 0))
+
     fallback_needed = _detect_missing_metrics(breakdown)
     if fallback_needed:
         hf_stats = _fetch_hf_popularity_stats(item)
@@ -105,6 +118,20 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
                 metrics_blob["average"] = net_score
                 net_score_latency = net_score_latency or 0
 
+    for metric_name in OPENAPI_METRIC_FIELDS:
+        entry = breakdown.get(metric_name, {})
+        value = entry.get("value") if isinstance(entry, dict) else entry
+        try:
+            value_float = float(value)
+        except (TypeError, ValueError):
+            value_float = 0.0
+        latency = int(entry.get("latency_ms", 0)) if isinstance(entry, dict) else 0
+        availability = entry.get("available") if isinstance(entry, dict) else False
+        print(
+            f"[rate.http] Metric {metric_name} model={model_id} value={value_float:.3f} latency={latency}ms available={availability}",
+            flush=True,
+        )
+
     response_payload = _build_openapi_response(
         item=item,
         model_id=model_id,
@@ -113,25 +140,6 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
         breakdown=breakdown,
     )
     _apply_size_score_format(response_payload, breakdown.get("size_score") or {})
-    response_payload["scoring_status"] = scoring.get("status") or "UNKNOWN"
-    response_payload["eligibility"] = eligibility
-    if scoring.get("status") != "COMPLETED":
-        response_payload["pending_reason"] = scoring.get("status") or "rating pending"
-    if eligibility.get("minimum_evidence_met") is False:
-        response_payload["eligibility_reason"] = eligibility.get("reason") or "insufficient evidence coverage"
-
-    failed_metrics = list(metrics_blob.get("failed_metrics") or [])
-    for metric_name, entry in breakdown.items():
-        if isinstance(entry, dict) and (entry.get("failed") or entry.get("reason") == "metric_failed"):
-            if metric_name not in failed_metrics:
-                failed_metrics.append(metric_name)
-
-    if failed_metrics:
-        response_payload["failed_metrics"] = failed_metrics
-        response_payload["status"] = "FAILED_METRICS"
-        print(f"[rate.http] Metric failures detected for {model_id}: {failed_metrics}", flush=True)
-        return _json_response(200, response_payload)
-
     print(f"[rate.http] Returning rating for model {model_id}", flush=True)
     return _json_response(200, response_payload)
 
@@ -233,6 +241,33 @@ def _build_dynamo_key(model_id: str) -> Dict[str, str]:
         pk_field: f"{pk_prefix}{model_id}",
         sk_field: sk_value,
     }
+
+
+def _needs_rescore(
+    scoring: Dict[str, Any], metrics_blob: Dict[str, Any], breakdown: Dict[str, Any]
+) -> bool:
+    if scoring.get("status") != "COMPLETED":
+        return True
+    if not metrics_blob or not breakdown:
+        return True
+    return bool(_detect_missing_metrics(breakdown))
+
+
+def _attempt_score_refresh(table: Any, model_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        _score_model(model_id, set())
+    except RateException as exc:
+        logger.warning("rate retry failed for %s: %s", model_id, exc.message)
+        return None
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Unexpected error during rate retry for %s: %s", model_id, exc)
+        return None
+    try:
+        refreshed = table.get_item(Key=_build_dynamo_key(model_id)).get("Item")
+    except ClientError as exc:  # pragma: no cover
+        logger.warning("Failed to refetch model %s after scoring: %s", model_id, exc)
+        return None
+    return refreshed
 
 
 def _detect_missing_metrics(breakdown: Dict[str, Any]) -> List[str]:
