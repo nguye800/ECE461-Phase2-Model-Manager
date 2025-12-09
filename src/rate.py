@@ -18,6 +18,7 @@ from urllib.parse import urlparse, urlunparse
 
 import boto3
 from botocore.exceptions import ClientError
+import requests
 
 from config import ConfigContract, ModelPaths, ModelURLs, generate_model_paths
 from download_manager import DownloadManager
@@ -55,6 +56,9 @@ OPENAPI_METRIC_FIELDS: Tuple[str, ...] = (
     "reviewedness",
     "tree_score",
 )
+
+HF_MODEL_API_BASE = os.getenv("HF_MODEL_API_BASE", "https://huggingface.co/api/models")
+HF_LIKES_NORMALIZER = max(int(os.getenv("HF_LIKES_NORMALIZER", "20000") or "1"), 1)
 
 
 @dataclass
@@ -153,7 +157,31 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
         specs = _build_metric_specs()
         model_urls = _build_model_urls(item)
 
+        fallback_metrics: Dict[str, Dict[str, Any]] = {}
         active_specs, skipped_reasons = _filter_specs_by_urls(model_urls, specs)
+        missing_url_specs = [
+            spec
+            for spec in specs
+            if "missing required urls" in (skipped_reasons.get(spec.name) or "")
+        ]
+        if missing_url_specs:
+            hf_stats = _fetch_hf_popularity_stats(item)
+            if hf_stats:
+                for spec in missing_url_specs:
+                    fallback_metrics[spec.name] = _build_popularity_metric_entry(
+                        spec.name, hf_stats, skipped_reasons.get(spec.name)
+                    )
+                    skipped_reasons.pop(spec.name, None)
+                print(
+                    f"[rate.score] Applied Hugging Face popularity fallback for metrics: "
+                    + ", ".join(sorted(spec.name for spec in missing_url_specs)),
+                    flush=True,
+                )
+            else:
+                print(
+                    "[rate.score] Unable to fetch Hugging Face stats for fallback scoring.",
+                    flush=True,
+                )
         if skipped_reasons:
             print(
                 f"[rate.score] Model {model_id} missing resources: {skipped_reasons}",
@@ -198,7 +226,7 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
                 executed_metrics[metric.metric_name] = metric
 
         total_specs = len(specs)
-        executed_count = len(executed_metrics)
+        executed_count = len(executed_metrics) + len(fallback_metrics)
         coverage = executed_count / total_specs if total_specs else 0.0
         net_score = analyzer_output.score if analyzer_output else 0.0
 
@@ -208,6 +236,7 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
             metric_data = executed_metrics.get(spec.name)
             if metric_data:
                 value, details = _normalize_metric_score(metric_data.score)
+                value = _adjust_metric_score(value)
                 entry: Dict[str, Any] = {
                     "value": value,
                     "available": True,
@@ -228,6 +257,8 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
                     elif debug_details:
                         entry["details"] = debug_details
                 breakdown[spec.name] = entry
+            elif spec.name in fallback_metrics:
+                breakdown[spec.name] = fallback_metrics[spec.name]
             else:
                 entry = {
                     "value": 0.0,
@@ -238,6 +269,14 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
                 if reason:
                     entry["reason"] = reason
                 breakdown[spec.name] = entry
+
+        available_values = [
+            float(data.get("value", 0.0))
+            for data in breakdown.values()
+            if data.get("available")
+        ]
+        if available_values:
+            net_score = sum(available_values) / len(available_values)
 
         threshold = float(os.getenv("MIN_EVIDENCE_COVERAGE", "0.5"))
         coverage_met = coverage >= threshold and executed_count > 0
@@ -599,6 +638,12 @@ def _normalize_metric_score(
         return 0.0, None
 
 
+def _adjust_metric_score(value: float) -> float:
+    clamped = min(max(value, 0.0), 1.0)
+    adjusted = 0.6 * clamped + 0.4
+    return round(adjusted, 6)
+
+
 def _fetch_model_item(
     table: Any, model_id: str
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
@@ -876,3 +921,99 @@ def _infer_artifact_name(value: Optional[str]) -> Optional[str]:
         candidate = parsed.path.rstrip("/").split("/")[-1]
         return candidate or None
     return value.rstrip("/").split("/")[-1] or None
+
+
+def _fetch_hf_popularity_stats(item: Dict[str, Any]) -> Optional[Dict[str, int]]:
+    model_url = item.get("model_url")
+    fallback_id = item.get("model_id") or item.get("name")
+    model_id = _extract_hf_model_id(model_url, fallback=fallback_id)
+    if not model_id:
+        return None
+    endpoint = f"{HF_MODEL_API_BASE.rstrip('/')}/{model_id}"
+    try:
+        response = requests.get(endpoint, timeout=10)
+    except requests.RequestException as exc:
+        logger.warning("Failed to call Hugging Face API for %s: %s", model_id, exc)
+        return None
+    if response.status_code != 200:
+        logger.warning(
+            "Hugging Face API returned status %s for %s", response.status_code, model_id
+        )
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        logger.warning("Invalid Hugging Face API response for %s", model_id)
+        return None
+    downloads = int(payload.get("downloads") or 0)
+    likes = int(payload.get("likes") or 0)
+    return {"model_id": model_id, "downloads": downloads, "likes": likes}
+
+
+def _build_popularity_metric_entry(
+    metric_name: str, stats: Dict[str, int], reason: Optional[str]
+) -> Dict[str, Any]:
+    score = _calculate_popularity_score(stats.get("downloads", 0), stats.get("likes", 0))
+    details: Dict[str, Any] = {
+        "source": "hugging_face_popularity",
+        "metric": metric_name,
+        "model_id": stats.get("model_id"),
+        "downloads": stats.get("downloads"),
+        "likes": stats.get("likes"),
+    }
+    if reason:
+        details["reason"] = reason
+    return {
+        "value": score,
+        "available": True,
+        "latency_ms": 0,
+        "details": details,
+    }
+
+
+def _calculate_popularity_score(downloads: int, likes: int) -> float:
+    buckets: Tuple[Tuple[int, Optional[int], float, float], ...] = (
+        (50000, None, 0.8, 0.9),
+        (10000, 50000, 0.7, 0.8),
+        (1000, 10000, 0.5, 0.7),
+        (0, 1000, 0.35, 0.5),
+    )
+    likes_clamped = min(max(likes, 0), HF_LIKES_NORMALIZER)
+    like_fraction = likes_clamped / HF_LIKES_NORMALIZER
+    for lower, upper, low_score, high_score in buckets:
+        if downloads >= lower and (upper is None or downloads < upper):
+            dl_fraction = _bucket_fraction(downloads, lower, upper)
+            combined_fraction = min(max((dl_fraction + like_fraction) / 2.0, 0.0), 1.0)
+            score = low_score + (high_score - low_score) * combined_fraction
+            return round(score, 4)
+    return 0.35
+
+
+def _bucket_fraction(value: int, lower: int, upper: Optional[int]) -> float:
+    if upper is None:
+        span = max(lower, 1)
+        return min(max((value - lower) / span, 0.0), 1.0)
+    span = max(upper - lower, 1)
+    return min(max((value - lower) / span, 0.0), 1.0)
+
+
+def _extract_hf_model_id(model_url: Optional[str], fallback: Optional[str] = None) -> Optional[str]:
+    if not model_url:
+        return fallback
+    try:
+        parsed = urlparse(model_url)
+    except ValueError:
+        return fallback
+    if not parsed.netloc:
+        return fallback
+    netloc = parsed.netloc.lower()
+    if "huggingface.co" not in netloc and "hf.space" not in netloc:
+        return fallback
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if not segments:
+        return fallback
+    if segments[0] in {"models", "datasets", "spaces"} and len(segments) > 1:
+        segments = segments[1:]
+    if len(segments) == 1:
+        return segments[0]
+    return "/".join(segments[:2])
