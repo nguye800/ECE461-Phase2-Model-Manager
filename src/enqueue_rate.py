@@ -104,93 +104,9 @@ def handler(event: Any, context: Any) -> Dict[str, Any]:
         response_payload["failed_metrics"] = failed_metrics
         response_payload["status"] = "FAILED_METRICS"
         print(f"[rate.http] Metric failures detected for {model_id}: {failed_metrics}", flush=True)
-        # testing      
-        # TEMP: overwrite only scores/latencies for testing
-        response_payload["net_score"] = 0.85
-        response_payload["net_score_latency"] = 500
-
-        response_payload["ramp_up_time"] = 0.85
-        response_payload["ramp_up_time_latency"] = 500
-
-        response_payload["bus_factor"] = 0.85
-        response_payload["bus_factor_latency"] = 500
-
-        response_payload["performance_claims"] = 0.85
-        response_payload["performance_claims_latency"] = 500
-
-        response_payload["license"] = 1
-        response_payload["license_latency"] = 500
-
-        response_payload["dataset_and_code_score"] = 0.85
-        response_payload["dataset_and_code_score_latency"] = 500
-
-        response_payload["dataset_quality"] = 0.85
-        response_payload["dataset_quality_latency"] = 500
-
-        response_payload["code_quality"] = 0.85
-        response_payload["code_quality_latency"] = 500
-
-        response_payload["reproducibility"] = 0.85
-        response_payload["reproducibility_latency"] = 500
-
-        response_payload["reviewedness"] = 0.85
-        response_payload["reviewedness_latency"] = 500
-
-        response_payload["tree_score"] = 0.85
-        response_payload["tree_score_latency"] = 500
-
-        response_payload["size_score"] = {
-            "raspberry_pi": 0.85,
-            "jetson_nano": 0.85,
-            "desktop_pc": 0.85,
-            "aws_server": 0.85,
-        }
-        response_payload["size_score_latency"] = 500
         return _json_response(200, response_payload)
 
     print(f"[rate.http] Returning rating for model {model_id}", flush=True)
-    # testing 
-    # TEMP: overwrite only scores/latencies for testing
-    response_payload["net_score"] = 0.85
-    response_payload["net_score_latency"] = 500
-
-    response_payload["ramp_up_time"] = 0.85
-    response_payload["ramp_up_time_latency"] = 500
-
-    response_payload["bus_factor"] = 0.85
-    response_payload["bus_factor_latency"] = 500
-
-    response_payload["performance_claims"] = 0.85
-    response_payload["performance_claims_latency"] = 500
-
-    response_payload["license"] = 1
-    response_payload["license_latency"] = 500
-
-    response_payload["dataset_and_code_score"] = 0.85
-    response_payload["dataset_and_code_score_latency"] = 500
-
-    response_payload["dataset_quality"] = 0.85
-    response_payload["dataset_quality_latency"] = 500
-
-    response_payload["code_quality"] = 0.85
-    response_payload["code_quality_latency"] = 500
-
-    response_payload["reproducibility"] = 0.85
-    response_payload["reproducibility_latency"] = 500
-
-    response_payload["reviewedness"] = 0.85
-    response_payload["reviewedness_latency"] = 500
-
-    response_payload["tree_score"] = 0.85
-    response_payload["tree_score_latency"] = 500
-
-    response_payload["size_score"] = {
-        "raspberry_pi": 0.85,
-        "jetson_nano": 0.85,
-        "desktop_pc": 0.85,
-        "aws_server": 0.85,
-    }
-    response_payload["size_score_latency"] = 500
     return _json_response(200, response_payload)
 
 

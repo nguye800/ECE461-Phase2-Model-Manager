@@ -257,8 +257,16 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
                     elif debug_details:
                         entry["details"] = debug_details
                 breakdown[spec.name] = entry
+                print(
+                    f"[rate.score] Metric {spec.name} on model {model_id} value={entry['value']:.3f} latency={entry['latency_ms']}ms",
+                    flush=True,
+                )
             elif spec.name in fallback_metrics:
                 breakdown[spec.name] = fallback_metrics[spec.name]
+                print(
+                    f"[rate.score] Metric {spec.name} on model {model_id} fallback_value={breakdown[spec.name]['value']:.3f}",
+                    flush=True,
+                )
             else:
                 entry = {
                     "value": 0.0,
@@ -269,6 +277,10 @@ def _score_model(model_id: str, visited: Optional[Set[str]] = None) -> Dict[str,
                 if reason:
                     entry["reason"] = reason
                 breakdown[spec.name] = entry
+                print(
+                    f"[rate.score] Metric {spec.name} on model {model_id} unavailable reason={entry.get('reason','unknown')}",
+                    flush=True,
+                )
 
         available_values = [
             float(data.get("value", 0.0))

@@ -589,7 +589,7 @@ class ArtifactRepository:
         total_needed: int,
         start_key: dict[str, Any] | None = None,
     ) -> tuple[list[dict], dict[str, Any] | None]:
-        MAX_HAYSTACK_CHARS = 4096  # defensive limit to avoid catastrophic backtracking
+        MAX_HAYSTACK_CHARS = 25000  # defensive limit to avoid catastrophic backtracking
 
         def predicate(item: dict) -> bool:
             # Only run regex on a bounded prefix of each string field
