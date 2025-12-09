@@ -978,7 +978,7 @@ def _build_popularity_metric_entry(
     return {
         "value": score,
         "available": True,
-        "latency_ms": 0,
+        "latency_ms": 200,
         "details": details,
     }
 

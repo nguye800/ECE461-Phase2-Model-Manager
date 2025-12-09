@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from decimal import Decimal
@@ -13,11 +14,13 @@ from urllib.parse import unquote, urlparse
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
+import requests
 
 ARTIFACTS_TABLE_NAME = os.environ.get("ARTIFACTS_DDB_TABLE", "model-metadata")
 ARTIFACTS_DDB_REGION = os.environ.get("ARTIFACTS_DDB_REGION", "us-east-1")
 DEFAULT_MODEL_BUCKET = os.environ.get("MODEL_BUCKET_NAME", "modelzip-logs-artifacts")
 S3_CLIENT = boto3.client("s3")
+HF_MODELS_API = os.environ.get("HF_MODELS_API", "https://huggingface.co/api/models")
 
 BYTES_IN_MB = 1024 * 1024
 
@@ -306,7 +309,8 @@ def _build_lineage_graph(
         "source": "registry",
     }
 
-    base_models = metadata_item.get("base_models") or []
+    base_models = list(metadata_item.get("base_models") or [])
+    base_models = _augment_base_models_with_hints(base_models, metadata_item)
     for index, base in enumerate(base_models):
         base_id = (
             base.get("artifact_id")
@@ -335,6 +339,161 @@ def _build_lineage_graph(
         )
 
     return {"nodes": list(nodes.values()), "edges": edges}
+
+
+def _augment_base_models_with_hints(
+    base_models: List[Dict[str, Any]], metadata_item: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    hints = _extract_lineage_hints(metadata_item)
+    if not hints:
+        return base_models
+    existing = {
+        _normalize_lineage_key(entry)
+        for entry in base_models
+        if _normalize_lineage_key(entry)
+    }
+    augmented = list(base_models)
+    for hint in hints:
+        entry = _lookup_hf_model_entry(hint)
+        if not entry:
+            continue
+        key = _normalize_lineage_key(entry)
+        if key and key in existing:
+            continue
+        augmented.append(entry)
+        if key:
+            existing.add(key)
+    return augmented
+
+
+def _extract_lineage_hints(metadata_item: Dict[str, Any]) -> List[str]:
+    hints: List[str] = []
+    metadata_block = metadata_item.get("metadata") or {}
+    candidates = [
+        metadata_block.get("base_models_modelID"),
+        metadata_block.get("base_models_model_id"),
+        metadata_block.get("base_model"),
+        metadata_block.get("base_model_urls"),
+        metadata_item.get("base_models_modelID"),
+    ]
+    for value in candidates:
+        hints.extend(_coerce_hint_values(value))
+    return [hint for hint in hints if hint]
+
+
+def _coerce_hint_values(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = re.split(r"[,\n]+", value)
+        return [part.strip() for part in parts if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        collected: List[str] = []
+        for entry in value:
+            if isinstance(entry, str):
+                collected.extend(_coerce_hint_values(entry))
+        return collected
+    return []
+
+
+def _lookup_hf_model_entry(hint: str) -> Optional[Dict[str, Any]]:
+    slug = _extract_hf_slug_from_hint(hint)
+    data = None
+    if slug:
+        data = _fetch_hf_model(slug)
+    if not data:
+        data = _search_hf_models(hint)
+    if not data:
+        return None
+    return _build_base_model_entry_from_hf(data)
+
+
+def _extract_hf_slug_from_hint(hint: str) -> Optional[str]:
+    value = hint.strip()
+    if not value:
+        return None
+    if value.startswith("http"):
+        try:
+            parsed = urlparse(value)
+        except ValueError:
+            return None
+        segments = [segment for segment in parsed.path.split("/") if segment]
+        if len(segments) >= 2:
+            return f"{segments[0]}/{segments[1]}"
+        return None
+    if "/" in value:
+        parts = [part for part in value.split("/") if part]
+        if len(parts) >= 2:
+            return f"{parts[0]}/{parts[1]}"
+    return value
+
+
+def _fetch_hf_model(slug: str) -> Optional[Dict[str, Any]]:
+    endpoint = f"{HF_MODELS_API.rstrip('/')}/{slug}"
+    try:
+        response = requests.get(endpoint, timeout=10)
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
+def _search_hf_models(query: str) -> Optional[Dict[str, Any]]:
+    try:
+        response = requests.get(
+            HF_MODELS_API.rstrip("/"),
+            params={"search": query},
+            timeout=10,
+        )
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if isinstance(payload, list) and payload:
+        first = payload[0]
+        if isinstance(first, dict):
+            return first
+    return None
+
+
+def _build_base_model_entry_from_hf(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    slug = (
+        data.get("id")
+        or data.get("modelId")
+        or data.get("model_id")
+        or data.get("name")
+    )
+    if not slug:
+        return None
+    name = data.get("modelId") or data.get("model_id") or data.get("name") or slug
+    model_url = data.get("modelUrl") or f"https://huggingface.co/{slug}"
+    entry = {
+        "artifact_id": slug,
+        "model_id": slug,
+        "name": name,
+        "model_url": model_url,
+        "source": "huggingface_lookup",
+        "relation": "base_model",
+    }
+    if data.get("pipeline_tag"):
+        entry["pipeline_tag"] = data["pipeline_tag"]
+    return entry
+
+
+def _normalize_lineage_key(entry: Dict[str, Any]) -> Optional[str]:
+    for field in ("artifact_id", "model_id", "model_url", "name"):
+        value = entry.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return None
 
 
 def _build_cost_payload(
