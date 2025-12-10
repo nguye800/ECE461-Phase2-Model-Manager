@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 import requests
 
@@ -23,6 +23,27 @@ S3_CLIENT = boto3.client("s3")
 HF_MODELS_API = os.environ.get("HF_MODELS_API", "https://huggingface.co/api/models")
 
 BYTES_IN_MB = 1024 * 1024
+
+
+def _hf_api_get(url: str, params: Optional[Dict[str, str]] = None) -> Optional[Any]:
+    try:
+        response = requests.get(
+            url,
+            params=params,
+            timeout=10,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "metadata-lineage",
+            },
+        )
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        return response.json()
+    except ValueError:
+        return None
 
 
 class MissingDownloadLocation(Exception):
@@ -302,15 +323,56 @@ def _build_lineage_graph(
 ) -> Dict[str, List[Dict[str, Any]]]:
     nodes: Dict[str, Dict[str, Any]] = {}
     edges: List[Dict[str, Any]] = []
+    edge_keys: set[Tuple[str, str, str]] = set()
 
-    nodes[artifact_id] = {
-        "artifact_id": artifact_id,
-        "name": metadata_item.get("name") or metadata_item.get("metadata", {}).get("name"),
-        "source": "registry",
-    }
+    def _ensure_node(node_id: Optional[str], name: Optional[str], source: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> None:
+        if not node_id:
+            return
+        entry = nodes.get(node_id)
+        if entry is None:
+            entry = {
+                "artifact_id": node_id,
+                "name": name or node_id,
+                "source": source or "registry",
+            }
+            if metadata:
+                entry["metadata"] = metadata
+            nodes[node_id] = entry
+        elif metadata and not entry.get("metadata"):
+            entry["metadata"] = metadata
+
+    def _add_edge(src: Optional[str], dst: Optional[str], relationship: str) -> None:
+        if not src or not dst:
+            return
+        key = (src, dst, relationship)
+        if key in edge_keys:
+            return
+        edges.append(
+            {
+                "from_node_artifact_id": src,
+                "to_node_artifact_id": dst,
+                "relationship": relationship,
+            }
+        )
+        edge_keys.add(key)
+
+    _ensure_node(
+        artifact_id,
+        metadata_item.get("name") or metadata_item.get("metadata", {}).get("name"),
+        "registry",
+    )
 
     base_models = list(metadata_item.get("base_models") or [])
     base_models = _augment_base_models_with_hints(base_models, metadata_item)
+    normalized_parent_ids: Dict[str, str] = {}
+
+    def _register_parent_id(value: Optional[str]) -> None:
+        norm = _normalize_lineage_value(value)
+        if norm:
+            normalized_parent_ids.setdefault(norm, value or norm)
+
+    _register_parent_id(artifact_id)
+
     for index, base in enumerate(base_models):
         base_id = (
             base.get("artifact_id")
@@ -318,25 +380,50 @@ def _build_lineage_graph(
             or base.get("id")
             or f"{artifact_id}-base-{index}"
         )
-        if base_id not in nodes:
-            nodes[base_id] = {
-                "artifact_id": base_id,
-                "name": base.get("name") or base.get("model_id") or base_id,
-                "source": base.get("source") or "base_model",
-                "metadata": {
-                    k: v
-                    for k, v in base.items()
-                    if k not in {"artifact_id", "model_id", "name", "source"}
-                }
-                or None,
-            }
-        edges.append(
-            {
-                "from_node_artifact_id": base_id,
-                "to_node_artifact_id": artifact_id,
-                "relationship": base.get("relation") or "base_model",
-            }
+        metadata_payload = {
+            k: v
+            for k, v in base.items()
+            if k not in {"artifact_id", "model_id", "name", "source"}
+        } or None
+        _ensure_node(
+            base_id,
+            base.get("name") or base.get("model_id") or base_id,
+            base.get("source") or "base_model",
+            metadata_payload,
         )
+        _add_edge(base_id, artifact_id, base.get("relation") or "base_model")
+        _register_parent_id(base_id)
+
+    children_map = _collect_children_for_parents(set(normalized_parent_ids.keys()))
+
+    root_norm = _normalize_lineage_value(artifact_id)
+    for child in children_map.get(root_norm, []):
+        child_id = child.get("artifact_id")
+        if not child_id or child_id == artifact_id:
+            continue
+        _ensure_node(child_id, child.get("name") or child_id, child.get("source") or "derived_model")
+        _add_edge(artifact_id, child_id, "derived_model")
+
+    for index, base in enumerate(base_models):
+        base_id = (
+            base.get("artifact_id")
+            or base.get("model_id")
+            or base.get("id")
+            or f"{artifact_id}-base-{index}"
+        )
+        norm = _normalize_lineage_value(base_id)
+        if not norm:
+            continue
+        for sibling in children_map.get(norm, []):
+            sibling_id = sibling.get("artifact_id")
+            if not sibling_id or sibling_id == artifact_id:
+                continue
+            _ensure_node(
+                sibling_id,
+                sibling.get("name") or sibling_id,
+                sibling.get("source") or "derived_model",
+            )
+            _add_edge(base_id, sibling_id, "derived_model")
 
     return {"nodes": list(nodes.values()), "edges": edges}
 
@@ -430,33 +517,12 @@ def _extract_hf_slug_from_hint(hint: str) -> Optional[str]:
 
 def _fetch_hf_model(slug: str) -> Optional[Dict[str, Any]]:
     endpoint = f"{HF_MODELS_API.rstrip('/')}/{slug}"
-    try:
-        response = requests.get(endpoint, timeout=10)
-    except requests.RequestException:
-        return None
-    if response.status_code != 200:
-        return None
-    try:
-        return response.json()
-    except ValueError:
-        return None
+    data = _hf_api_get(endpoint)
+    return data if isinstance(data, dict) else None
 
 
 def _search_hf_models(query: str) -> Optional[Dict[str, Any]]:
-    try:
-        response = requests.get(
-            HF_MODELS_API.rstrip("/"),
-            params={"search": query},
-            timeout=10,
-        )
-    except requests.RequestException:
-        return None
-    if response.status_code != 200:
-        return None
-    try:
-        payload = response.json()
-    except ValueError:
-        return None
+    payload = _hf_api_get(HF_MODELS_API.rstrip("/"), {"search": query})
     if isinstance(payload, list) and payload:
         first = payload[0]
         if isinstance(first, dict):
@@ -494,6 +560,62 @@ def _normalize_lineage_key(entry: Dict[str, Any]) -> Optional[str]:
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
     return None
+
+
+def _normalize_lineage_value(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    slug = _extract_hf_slug_from_hint(value)
+    if slug:
+        return slug.strip().lower()
+    return value.strip().lower()
+
+
+def _collect_children_for_parents(parent_keys: set[str]) -> Dict[str, List[Dict[str, Any]]]:
+    if not parent_keys:
+        return {}
+    table = _get_table()
+    filter_expression = Attr("sk").eq("META") & Attr("pk").begins_with("MODEL#")
+    scan_kwargs: Dict[str, Any] = {"FilterExpression": filter_expression}
+    result: Dict[str, List[Dict[str, Any]]] = {key: [] for key in parent_keys}
+    while True:
+        response = table.scan(**scan_kwargs)
+        for item in response.get("Items", []):
+            plain = _convert(item)
+            matches = _normalized_parents_from_model(plain) & parent_keys
+            if not matches:
+                continue
+            child_entry = _simplify_child_entry(plain)
+            for key in matches:
+                result.setdefault(key, []).append(child_entry)
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        scan_kwargs["ExclusiveStartKey"] = last_key
+    return {key: children for key, children in result.items() if children}
+
+
+def _normalized_parents_from_model(model_item: Dict[str, Any]) -> set[str]:
+    normalized: set[str] = set()
+    for base in model_item.get("base_models") or []:
+        norm = _normalize_lineage_value(_normalize_lineage_key(base) or base.get("model_id"))
+        if norm:
+            normalized.add(norm)
+    for hint in _extract_lineage_hints(model_item):
+        norm = _normalize_lineage_value(hint)
+        if norm:
+            normalized.add(norm)
+    return normalized
+
+
+def _simplify_child_entry(model_item: Dict[str, Any]) -> Dict[str, Any]:
+    name = model_item.get("name") or model_item.get("metadata", {}).get("name")
+    return {
+        "artifact_id": model_item.get("model_id"),
+        "name": name or model_item.get("model_id"),
+        "model_url": model_item.get("model_url"),
+        "source": "derived_model",
+    }
 
 
 def _build_cost_payload(
