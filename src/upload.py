@@ -30,7 +30,7 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 
@@ -39,6 +39,7 @@ from boto3.dynamodb.types import TypeSerializer
 from boto3.session import Session
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
+import requests
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
@@ -49,6 +50,7 @@ MODEL_BUCKET_NAME = "modelzip-logs-artifacts"
 STREAM_CHUNK_SIZE = 8 * 1024 * 1024
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "meta.llama3-8b-instruct-v1:0")
+HF_MODELS_API = os.getenv("HF_MODELS_API", "https://huggingface.co/api/models")
 README_ANALYSIS_PROMPT = (
     "You are analyzing the README for a Hugging Face model. "
     "Identify if it references a dataset (typically a Hugging Face dataset) and/or a GitHub code repository. "
@@ -1048,6 +1050,364 @@ def _build_ddb_item(
     item["updated_at"] = now
 
     return item
+
+
+def _hf_api_get(url: str, params: Optional[Dict[str, str]] = None) -> Optional[Any]:
+    try:
+        response = requests.get(
+            url,
+            params=params,
+            timeout=10,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "upload-lineage",
+            },
+        )
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
+def _build_lineage_graph_payload(table, model_item: Dict[str, Any]) -> Tuple[Dict[str, Any], Set[str]]:
+    artifact_id = model_item.get("model_id")
+    if not artifact_id:
+        return {"nodes": [], "edges": []}, set()
+
+    nodes: Dict[str, Dict[str, Any]] = {}
+    edges: List[Dict[str, Any]] = []
+    edge_keys: Set[Tuple[str, str, str]] = set()
+    related: Set[str] = set()
+
+    def _ensure_node(
+        node_id: Optional[str],
+        name: Optional[str],
+        source: Optional[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not node_id:
+            return
+        entry = nodes.get(node_id)
+        if entry is None:
+            entry = {
+                "artifact_id": node_id,
+                "name": name or node_id,
+                "source": source or "registry",
+            }
+            if metadata:
+                entry["metadata"] = metadata
+            nodes[node_id] = entry
+        elif metadata and "metadata" not in entry:
+            entry["metadata"] = metadata
+
+    def _add_edge(src: Optional[str], dst: Optional[str], relationship: str) -> None:
+        if not src or not dst:
+            return
+        key = (src, dst, relationship)
+        if key in edge_keys:
+            return
+        edges.append(
+            {
+                "from_node_artifact_id": src,
+                "to_node_artifact_id": dst,
+                "relationship": relationship,
+            }
+        )
+        edge_keys.add(key)
+
+    _ensure_node(
+        artifact_id,
+        model_item.get("name") or model_item.get("metadata", {}).get("name"),
+        "registry",
+    )
+
+    base_models = list(model_item.get("base_models") or [])
+    base_models = _augment_base_models_with_hints(base_models, model_item)
+    normalized_parent_ids: Dict[str, str] = {}
+
+    def _register_parent_id(value: Optional[str]) -> None:
+        norm = _normalize_lineage_value(value)
+        if norm:
+            normalized_parent_ids.setdefault(norm, value or norm)
+
+    _register_parent_id(artifact_id)
+
+    for index, base in enumerate(base_models):
+        base_id = (
+            base.get("artifact_id")
+            or base.get("model_id")
+            or base.get("id")
+            or f"{artifact_id}-base-{index}"
+        )
+        metadata_payload = {
+            k: v
+            for k, v in base.items()
+            if k not in {"artifact_id", "model_id", "name", "source"}
+        } or None
+        _ensure_node(
+            base_id,
+            base.get("name") or base.get("model_id") or base_id,
+            base.get("source") or "base_model",
+            metadata_payload,
+        )
+        _add_edge(base_id, artifact_id, base.get("relation") or "base_model")
+        parent_record_id = base.get("artifact_id") or base.get("model_id")
+        if parent_record_id:
+            related.add(parent_record_id)
+        _register_parent_id(base_id)
+
+    children_map = _collect_children_for_parents(table, set(normalized_parent_ids.keys()))
+
+    root_norm = _normalize_lineage_value(artifact_id)
+    for child in children_map.get(root_norm, []):
+        child_id = child.get("artifact_id")
+        if not child_id or child_id == artifact_id:
+            continue
+        related.add(child_id)
+        _ensure_node(child_id, child.get("name") or child_id, child.get("source") or "derived_model")
+        _add_edge(artifact_id, child_id, "derived_model")
+
+    for index, base in enumerate(base_models):
+        base_id = (
+            base.get("artifact_id")
+            or base.get("model_id")
+            or base.get("id")
+            or f"{artifact_id}-base-{index}"
+        )
+        norm = _normalize_lineage_value(base_id)
+        if not norm:
+            continue
+        for sibling in children_map.get(norm, []):
+            sibling_id = sibling.get("artifact_id")
+            if not sibling_id or sibling_id == artifact_id:
+                continue
+            related.add(sibling_id)
+            _ensure_node(
+                sibling_id,
+                sibling.get("name") or sibling_id,
+                sibling.get("source") or "derived_model",
+            )
+            _add_edge(base_id, sibling_id, "derived_model")
+
+    graph = {"nodes": list(nodes.values()), "edges": edges}
+    return graph, related
+
+
+def _refresh_lineage_for_models(table, model_ids: Set[str]) -> None:
+    refreshed: Set[str] = set()
+    for model_id in sorted(model_ids):
+        if not model_id or model_id in refreshed:
+            continue
+        key = _build_dynamo_key("model", model_id)
+        existing = _fetch_existing_item(table, key)
+        if not existing:
+            continue
+        graph, _ = _build_lineage_graph_payload(table, existing)
+        existing["lineage"] = graph
+        existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            _put_item(table, existing)
+        except ClientError as exc:
+            LOGGER.warning("Failed to refresh lineage for %s: %s", model_id, exc)
+            continue
+        refreshed.add(model_id)
+
+
+def _augment_base_models_with_hints(
+    base_models: List[Dict[str, Any]], metadata_item: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    hints = _extract_lineage_hints(metadata_item)
+    if not hints:
+        return base_models
+    existing = {
+        _normalize_lineage_key(entry)
+        for entry in base_models
+        if _normalize_lineage_key(entry)
+    }
+    augmented = list(base_models)
+    for hint in hints:
+        entry = _lookup_hf_model_entry(hint)
+        if not entry:
+            continue
+        key = _normalize_lineage_key(entry)
+        if key and key in existing:
+            continue
+        augmented.append(entry)
+        if key:
+            existing.add(key)
+    return augmented
+
+
+def _extract_lineage_hints(metadata_item: Dict[str, Any]) -> List[str]:
+    hints: List[str] = []
+    metadata_block = metadata_item.get("metadata") or {}
+    candidates = [
+        metadata_block.get("base_models_modelID"),
+        metadata_block.get("base_models_model_id"),
+        metadata_block.get("base_model"),
+        metadata_block.get("base_model_urls"),
+        metadata_item.get("base_models_modelID"),
+    ]
+    for value in candidates:
+        hints.extend(_coerce_hint_values(value))
+    return [hint for hint in hints if hint]
+
+
+def _coerce_hint_values(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = re.split(r"[,\n]+", value)
+        return [part.strip() for part in parts if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        collected: List[str] = []
+        for entry in value:
+            if isinstance(entry, str):
+                collected.extend(_coerce_hint_values(entry))
+        return collected
+    return []
+
+
+def _lookup_hf_model_entry(hint: str) -> Optional[Dict[str, Any]]:
+    slug = _extract_hf_slug_from_hint(hint)
+    data = None
+    if slug:
+        data = _fetch_hf_model(slug)
+    if not data:
+        data = _search_hf_models(hint)
+    if not data:
+        return None
+    return _build_base_model_entry_from_hf(data)
+
+
+def _extract_hf_slug_from_hint(hint: str) -> Optional[str]:
+    value = hint.strip()
+    if not value:
+        return None
+    if value.startswith("http"):
+        try:
+            parsed = urlparse(value)
+        except ValueError:
+            return None
+        segments = [segment for segment in parsed.path.split("/") if segment]
+        if len(segments) >= 2:
+            return f"{segments[0]}/{segments[1]}"
+        return None
+    if "/" in value:
+        parts = [part for part in value.split("/") if part]
+        if len(parts) >= 2:
+            return f"{parts[0]}/{parts[1]}"
+    return value
+
+
+def _fetch_hf_model(slug: str) -> Optional[Dict[str, Any]]:
+    endpoint = f"{HF_MODELS_API.rstrip('/')}/{slug}"
+    data = _hf_api_get(endpoint)
+    return data if isinstance(data, dict) else None
+
+
+def _search_hf_models(query: str) -> Optional[Dict[str, Any]]:
+    payload = _hf_api_get(HF_MODELS_API.rstrip("/"), {"search": query})
+    if isinstance(payload, list) and payload:
+        first = payload[0]
+        if isinstance(first, dict):
+            return first
+    return None
+
+
+def _build_base_model_entry_from_hf(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    slug = (
+        data.get("id")
+        or data.get("modelId")
+        or data.get("model_id")
+        or data.get("name")
+    )
+    if not slug:
+        return None
+    name = data.get("modelId") or data.get("model_id") or data.get("name") or slug
+    model_url = data.get("modelUrl") or f"https://huggingface.co/{slug}"
+    entry = {
+        "artifact_id": slug,
+        "model_id": slug,
+        "name": name,
+        "model_url": model_url,
+        "source": "huggingface_lookup",
+        "relation": "base_model",
+    }
+    if data.get("pipeline_tag"):
+        entry["pipeline_tag"] = data["pipeline_tag"]
+    return entry
+
+
+def _normalize_lineage_key(entry: Dict[str, Any]) -> Optional[str]:
+    for field in ("artifact_id", "model_id", "model_url", "name"):
+        value = entry.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return None
+
+
+def _normalize_lineage_value(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    slug = _extract_hf_slug_from_hint(value)
+    if slug:
+        return slug.strip().lower()
+    return value.strip().lower()
+
+
+def _collect_children_for_parents(table, parent_keys: Set[str]) -> Dict[str, List[Dict[str, Any]]]:
+    if not parent_keys:
+        return {}
+
+    sk_field = os.getenv("RATE_SK_FIELD", "sk")
+    meta_sk = os.getenv("RATE_META_SK", "META")
+    filter_expression = Attr(sk_field).eq(meta_sk) & Attr("type").eq("MODEL")
+    scan_kwargs: Dict[str, Any] = {"FilterExpression": filter_expression}
+    result: Dict[str, List[Dict[str, Any]]] = {key: [] for key in parent_keys}
+
+    while True:
+        response = table.scan(**scan_kwargs)
+        for item in response.get("Items", []):
+            matches = _normalized_parents_from_model(item) & parent_keys
+            if not matches:
+                continue
+            child_entry = _simplify_child_entry(item)
+            for key in matches:
+                result.setdefault(key, []).append(child_entry)
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        scan_kwargs["ExclusiveStartKey"] = last_key
+    return {key: children for key, children in result.items() if children}
+
+
+def _normalized_parents_from_model(model_item: Dict[str, Any]) -> Set[str]:
+    normalized: Set[str] = set()
+    for base in model_item.get("base_models") or []:
+        key = _normalize_lineage_key(base) or base.get("model_id")
+        norm = _normalize_lineage_value(key)
+        if norm:
+            normalized.add(norm)
+    for hint in _extract_lineage_hints(model_item):
+        norm = _normalize_lineage_value(hint)
+        if norm:
+            normalized.add(norm)
+    return normalized
+
+
+def _simplify_child_entry(model_item: Dict[str, Any]) -> Dict[str, Any]:
+    name = model_item.get("name") or model_item.get("metadata", {}).get("name")
+    return {
+        "artifact_id": model_item.get("model_id"),
+        "name": name or model_item.get("model_id"),
+        "model_url": model_item.get("model_url"),
+        "source": "derived_model",
+    }
 
 
 def _resolve_request_user(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2185,6 +2545,10 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         existing = _fetch_existing_item(table, key)
 
         item = _build_ddb_item(request, uploaded_artifacts, artifact_type, existing)
+        related_lineage_ids: Set[str] = set()
+        if artifact_type == "model":
+            graph, related_lineage_ids = _build_lineage_graph_payload(table, item)
+            item["lineage"] = graph
         scoring_urls = _collect_scoring_urls(item, request)
         try:
             _put_item(table, item)
@@ -2194,6 +2558,8 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 502, {"status": "error", "message": "Failed to store artifact metadata"}
             )
         _process_dependency_resolution(artifact_type, item)
+        if artifact_type == "model" and related_lineage_ids:
+            _refresh_lineage_for_models(table, related_lineage_ids)
 
         action = "updated" if existing else "created"
 
