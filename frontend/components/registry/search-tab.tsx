@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ChevronDown,
   ChevronUp,
+  DollarSign,
   Download,
   FileSearch,
   Gavel,
@@ -79,16 +80,13 @@ export function SearchTab({ token }: SearchTabProps) {
 
   const doSearch = async (e?: React.FormEvent) => {
     e?.preventDefault()
-    if (!query.trim()) {
-      setStatus({ message: 'Enter a query or * to list all artifacts.', tone: 'error' })
-      return
-    }
+    const normalized = query.trim() || '*'
     setLoading(true)
     setStatus({ message: '', tone: 'idle' })
     setDetailState({})
     setPage(1)
 
-    const res = await searchArtifacts(query.trim(), token, defaultType)
+    const res = await searchArtifacts(normalized, token, defaultType)
     setLoading(false)
 
     if (res.error) {
@@ -112,9 +110,8 @@ export function SearchTab({ token }: SearchTabProps) {
       [key]: { ...(prev[key] ?? {}), loading: true, error: undefined },
     }))
 
-    const [rateRes, costRes, lineageRes] = await Promise.all([
+    const [rateRes, lineageRes] = await Promise.all([
       fetchRatings(artifact.id, token),
-      artifact.type ? fetchCost(artifact.type, artifact.id, token) : Promise.resolve({}),
       fetchLineage(artifact.id, token),
     ])
 
@@ -124,9 +121,8 @@ export function SearchTab({ token }: SearchTabProps) {
         ...(prev[key] ?? {}),
         loading: false,
         ratings: rateRes.data,
-        cost: artifact.type ? costRes.data : 'Artifact type required to fetch cost.',
         lineage: lineageRes.data,
-        error: rateRes.error || costRes.error || lineageRes.error,
+        error: rateRes.error || lineageRes.error,
       },
     }))
   }
@@ -166,6 +162,24 @@ export function SearchTab({ token }: SearchTabProps) {
     } else {
       setStatus({ message: 'Download URL not returned by the API.', tone: 'error' })
     }
+  }
+
+  const handleCostPopup = async (artifact: ArtifactSummary) => {
+    if (!artifact.type) {
+      setStatus({ message: 'Artifact type is required to fetch cost.', tone: 'error' })
+      return
+    }
+    const res = await fetchCost(artifact.type, artifact.id, token)
+    setDetailState((prev) => ({
+      ...prev,
+      [artifact.id]: { ...(prev[artifact.id] ?? {}), cost: res.data, error: res.error },
+    }))
+    if (res.error) {
+      setStatus({ message: res.error, tone: 'error' })
+      return
+    }
+    const payload = JSON.stringify(res.data ?? {}, null, 2)
+    window.alert(`Cost for ${artifact.name || artifact.id}:\n${payload}`)
   }
 
   const handleLicense = async (artifact: ArtifactSummary) => {
@@ -222,7 +236,7 @@ export function SearchTab({ token }: SearchTabProps) {
                 <SelectContent>
                   <SelectItem value="model">Model</SelectItem>
                   <SelectItem value="dataset">Dataset</SelectItem>
-                  <SelectItem value="codebase">Codebase</SelectItem>
+                  <SelectItem value="code">Code</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -288,6 +302,15 @@ export function SearchTab({ token }: SearchTabProps) {
                     >
                       <Info className="h-4 w-4" />
                       Audits
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1"
+                      onClick={() => handleCostPopup(artifact)}
+                    >
+                      <DollarSign className="h-4 w-4" />
+                      See Cost
                     </Button>
                     <Button
                       variant="destructive"
@@ -374,7 +397,7 @@ function DetailSection({ state, onRefresh, artifact }: DetailSectionProps) {
   if (!state) {
     return (
       <div className="text-sm text-muted-foreground">
-        Expand to fetch ratings, cost, and lineage for this artifact.
+        Expand to fetch ratings and lineage. Use “See Cost” to retrieve cost details.
       </div>
     )
   }
@@ -400,7 +423,7 @@ function DetailSection({ state, onRefresh, artifact }: DetailSectionProps) {
 
       <div className="grid gap-3 md:grid-cols-2">
         <InfoBlock title="Ratings" data={state.ratings} />
-        <InfoBlock title="Cost" data={state.cost} />
+        <InfoBlock title="Cost" data={state.cost ?? 'Use the See Cost button to fetch cost.'} />
       </div>
       <InfoBlock title="Lineage" data={state.lineage} />
       <InfoBlock title="License Check" data={state.license} />

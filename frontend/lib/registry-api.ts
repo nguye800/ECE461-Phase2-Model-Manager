@@ -24,7 +24,7 @@ const apiBase =
     : ''
 
 const withAuthHeaders = (token?: string, extra?: HeadersInit): HeadersInit => ({
-  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  ...(token ? { 'X-Authorization': token } : {}),
   ...extra,
 })
 
@@ -58,9 +58,6 @@ const httpJson = async <T>(path: string, init: RequestInit): Promise<FetchResult
   }
 }
 
-export const authenticate = async (): Promise<FetchResult<{ token?: string }>> =>
-  httpJson('/authenticate', { method: 'PUT' })
-
 export const resetRegistry = async (token?: string) =>
   httpJson('/reset', { method: 'DELETE', headers: withAuthHeaders(token) })
 
@@ -85,7 +82,7 @@ export const uploadArtifact = async ({
 }: UploadOptions) => {
   const path =
     mode === 'new'
-      ? `/artifacts/${encodeURIComponent(artifactType)}`
+      ? `/artifact/${encodeURIComponent(artifactType)}`
       : `/artifacts/${encodeURIComponent(artifactType)}/${encodeURIComponent(artifactId)}`
 
   if (sourceType === 'file') {
@@ -99,13 +96,22 @@ export const uploadArtifact = async ({
     })
   }
 
+  const createPayload = { url: sourceUrl }
+  const updatePayload = {
+    metadata: {
+      id: artifactId || undefined,
+      type: artifactType,
+      name: artifactId || undefined,
+    },
+    data: {
+      url: sourceUrl,
+    },
+  }
+
   return httpJson(path, {
     method: mode === 'new' ? 'POST' : 'PUT',
     headers: withAuthHeaders(token, { 'Content-Type': 'application/json' }),
-    body: JSON.stringify({
-      id: artifactId || undefined,
-      sourceUrl: sourceUrl,
-    }),
+    body: JSON.stringify(mode === 'new' ? createPayload : updatePayload),
   })
 }
 
@@ -145,12 +151,16 @@ export const searchArtifacts = async (
   token?: string,
   fallbackType?: string,
 ): Promise<FetchResult<{ artifacts: ArtifactSummary[]; source: string }>> => {
+  const normalizedQuery = query?.trim() || '*'
+  const artifactQuery: Record<string, unknown> = { name: normalizedQuery }
+  if (fallbackType) artifactQuery.types = [fallbackType]
+
   const strategies: Array<() => Promise<FetchResult<{ artifacts: ArtifactSummary[] }>>> = [
     async () => {
       const res = await httpJson('/artifacts', {
         method: 'POST',
         headers: withAuthHeaders(token, { 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ query }),
+        body: JSON.stringify([artifactQuery]),
       })
       return res.error
         ? { error: res.error }
@@ -169,7 +179,7 @@ export const searchArtifacts = async (
       const res = await httpJson('/artifact/byRegEx', {
         method: 'POST',
         headers: withAuthHeaders(token, { 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ regex: normalizedQuery }),
       })
       return res.error
         ? { error: res.error }
