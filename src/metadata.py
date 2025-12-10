@@ -411,6 +411,14 @@ def lambda_handler(event: Dict[str, Any], context):  # noqa: D401
 
         if method == "GET" and action == "lineage":
             graph = _stored_lineage_graph(metadata_item)
+            try:
+                preview = json.dumps(graph)
+            except (TypeError, ValueError):
+                preview = str(graph)
+            print(
+                f"[metadata.lineage] artifact={artifact_type}/{artifact_id} graph={preview}",
+                flush=True,
+            )
             print(
                 f"[metadata.lambda] Returning lineage for {artifact_type}/{artifact_id}",
                 flush=True,
