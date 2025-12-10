@@ -59,7 +59,15 @@ README_ANALYSIS_PROMPT = (
     '"code_name": "<name or null>", "code_url": "<github url or null>"}.\n'
     "If multiple candidates exist, pick the most prominent. Use null when unsure."
 )
+CONFIG_LINEAGE_PROMPT = (
+    "You are analyzing a Hugging Face model configuration JSON. "
+    "List any base or parent models referenced in the configuration. "
+    "Respond with JSON using this schema: "
+    '{"base_model_ids": ["<owner/name or url>", "..."]}. '
+    "Return an empty array when no parents are present."
+)
 MAX_README_CHARS = 6000
+MAX_CONFIG_CHARS = 4000
 HUGGINGFACE_REPO_PATTERN = re.compile(
     r"(?:https?://)?(?:www\.)?huggingface\.co/([^/]+)/([^/\s]+)"
 )
@@ -1217,6 +1225,23 @@ def _refresh_lineage_for_models(table, model_ids: Set[str]) -> None:
         refreshed.add(model_id)
 
 
+def _backfill_all_lineage(table) -> None:
+    try:
+        from scripts.backfill_lineage import backfill_lineage  # type: ignore
+    except Exception as exc:  # pragma: no cover - best effort logging
+        LOGGER.warning("Unable to import lineage backfill script: %s", exc)
+        return
+    try:
+        stats = backfill_lineage(table=table, force=False)
+        LOGGER.info(
+            "Lineage backfill processed=%s updated=%s",
+            stats.get("processed"),
+            stats.get("updated"),
+        )
+    except Exception as exc:  # pragma: no cover - best effort logging
+        LOGGER.warning("Lineage backfill execution failed: %s", exc)
+
+
 def _augment_base_models_with_hints(
     base_models: List[Dict[str, Any]], metadata_item: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
@@ -1254,6 +1279,7 @@ def _extract_lineage_hints(metadata_item: Dict[str, Any]) -> List[str]:
     ]
     for value in candidates:
         hints.extend(_coerce_hint_values(value))
+    hints.extend(_collect_config_lineage_hints(metadata_item))
     return [hint for hint in hints if hint]
 
 
@@ -1746,6 +1772,16 @@ def _candidate_model_readme_urls(owner: str, repo: str) -> List[str]:
     ]
 
 
+def _candidate_model_file_urls(owner: str, repo: str, filename: str) -> List[str]:
+    base = f"https://huggingface.co/{owner}/{repo}"
+    return [
+        f"{base}/raw/main/{filename}",
+        f"{base}/raw/master/{filename}",
+        f"{base}/resolve/main/{filename}",
+        f"{base}/resolve/master/{filename}",
+    ]
+
+
 def _safe_http_get(url: str) -> Optional[str]:
     if not url:
         return None
@@ -1830,6 +1866,75 @@ def _heuristic_related_entities(text: str) -> Dict[str, Optional[str]]:
     }
 
 
+def _fetch_hf_model_file_content(model_url: Optional[str], filename: str) -> Optional[str]:
+    if not model_url:
+        return None
+    owner, repo = _extract_hf_repo_segments(model_url)
+    if not owner or not repo:
+        return None
+    for candidate in _candidate_model_file_urls(owner, repo, filename):
+        text = _safe_http_get(candidate)
+        if text:
+            return text
+    return None
+
+
+def _collect_config_lineage_hints(metadata_item: Dict[str, Any]) -> List[str]:
+    metadata_block = metadata_item.get("metadata") or {}
+    model_url = metadata_item.get("model_url") or metadata_block.get("model_url") or metadata_block.get("url")
+    config_text = _fetch_hf_model_file_content(model_url, "config.json")
+    if not config_text:
+        return []
+    hints = _analyze_config_lineage(config_text)
+    if hints:
+        return hints
+    return _heuristic_config_lineage_hints(config_text)
+
+
+def _analyze_config_lineage(config_text: str) -> List[str]:
+    excerpt = (config_text or "").strip()
+    if not excerpt:
+        return []
+    if len(excerpt) > MAX_CONFIG_CHARS:
+        excerpt = excerpt[:MAX_CONFIG_CHARS]
+    prompt = f"{CONFIG_LINEAGE_PROMPT}\n\nConfig JSON:\n```\n{excerpt}\n```"
+    parsed = _invoke_bedrock_analysis(prompt)
+    if not isinstance(parsed, dict):
+        return []
+    base_models = parsed.get("base_model_ids") or parsed.get("base_models")
+    if not base_models:
+        return []
+    return [str(entry).strip() for entry in base_models if str(entry).strip()]
+
+
+def _heuristic_config_lineage_hints(config_text: str) -> List[str]:
+    try:
+        data = json.loads(config_text)
+    except Exception:
+        return []
+    hints: List[str] = []
+    for key in (
+        "base_model",
+        "base_model_name_or_path",
+        "parent_model",
+        "model_name",
+        "model_type",
+    ):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            hints.append(value.strip())
+    base_models = data.get("base_models")
+    if isinstance(base_models, list):
+        for entry in base_models:
+            if isinstance(entry, str) and entry.strip():
+                hints.append(entry.strip())
+    adapters = data.get("adapter_config") or {}
+    if isinstance(adapters, dict):
+        for key in ("base_model", "parent_model"):
+            entry = adapters.get(key)
+            if isinstance(entry, str) and entry.strip():
+                hints.append(entry.strip())
+    return hints
 
 
 def _fetch_hf_model_metadata(model_url: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -2543,6 +2648,7 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         uploaded_artifacts = _upload_artifacts(request, bucket_name)
         key = _build_dynamo_key(artifact_type, request.model_id)
         existing = _fetch_existing_item(table, key)
+        is_new_model = artifact_type == "model" and not existing
 
         item = _build_ddb_item(request, uploaded_artifacts, artifact_type, existing)
         related_lineage_ids: Set[str] = set()
@@ -2560,6 +2666,8 @@ def handle_upload(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         _process_dependency_resolution(artifact_type, item)
         if artifact_type == "model" and related_lineage_ids:
             _refresh_lineage_for_models(table, related_lineage_ids)
+        if is_new_model:
+            _backfill_all_lineage(table)
 
         action = "updated" if existing else "created"
 
