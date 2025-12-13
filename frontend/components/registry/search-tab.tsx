@@ -12,15 +12,37 @@ import {
   RefreshCw,
   Trash2,
 } from 'lucide-react'
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Pagination, PaginationContent, PaginationItem, PaginationLink } from '@/components/ui/pagination'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+} from '@/components/ui/pagination'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   checkLicense,
@@ -33,7 +55,6 @@ import {
   searchArtifacts,
   type ArtifactSummary,
 } from '@/lib/registry-api'
-import { cn } from '@/lib/utils'
 
 type SearchTabProps = {
   token?: string
@@ -61,7 +82,9 @@ export function SearchTab({ token }: SearchTabProps) {
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState<Status>({ message: '', tone: 'idle' })
   const [page, setPage] = useState(1)
-  const [detailState, setDetailState] = useState<Record<string, DetailState>>({})
+  const [detailState, setDetailState] = useState<Record<string, DetailState>>(
+    {},
+  )
 
   const paged = useMemo(() => {
     const start = (page - 1) * RESULTS_PER_PAGE
@@ -80,7 +103,10 @@ export function SearchTab({ token }: SearchTabProps) {
   const doSearch = async (e?: React.FormEvent) => {
     e?.preventDefault()
     if (!query.trim()) {
-      setStatus({ message: 'Enter a query or * to list all artifacts.', tone: 'error' })
+      setStatus({
+        message: 'Enter a query or * to list all artifacts.',
+        tone: 'error',
+      })
       return
     }
     setLoading(true)
@@ -96,6 +122,7 @@ export function SearchTab({ token }: SearchTabProps) {
       setResults([])
       return
     }
+
     const artifacts = res.data?.artifacts ?? []
     setResults(artifacts)
     setStatus(
@@ -107,15 +134,39 @@ export function SearchTab({ token }: SearchTabProps) {
 
   const loadDetails = async (artifact: ArtifactSummary) => {
     const key = artifact.id
+    const effectiveType = artifact.type || defaultType
+    const isModel = effectiveType === 'model'
+
     setDetailState((prev) => ({
       ...prev,
       [key]: { ...(prev[key] ?? {}), loading: true, error: undefined },
     }))
 
+    const ratingPromise = isModel
+      ? fetchRatings(artifact.id, token)
+      : Promise.resolve({
+          data: 'Ratings only apply to models.',
+          error: undefined,
+        })
+
+    const costPromise = effectiveType
+      ? fetchCost(effectiveType, artifact.id, token)
+      : Promise.resolve({
+          data: 'Artifact type required to fetch cost.',
+          error: undefined,
+        })
+
+    const lineagePromise = isModel
+      ? fetchLineage(artifact.id, token)
+      : Promise.resolve({
+          data: 'Lineage only applies to models.',
+          error: undefined,
+        })
+
     const [rateRes, costRes, lineageRes] = await Promise.all([
-      fetchRatings(artifact.id, token),
-      artifact.type ? fetchCost(artifact.type, artifact.id, token) : Promise.resolve({}),
-      fetchLineage(artifact.id, token),
+      ratingPromise,
+      costPromise,
+      lineagePromise,
     ])
 
     setDetailState((prev) => ({
@@ -124,7 +175,7 @@ export function SearchTab({ token }: SearchTabProps) {
         ...(prev[key] ?? {}),
         loading: false,
         ratings: rateRes.data,
-        cost: artifact.type ? costRes.data : 'Artifact type required to fetch cost.',
+        cost: costRes.data,
         lineage: lineageRes.data,
         error: rateRes.error || costRes.error || lineageRes.error,
       },
@@ -133,7 +184,10 @@ export function SearchTab({ token }: SearchTabProps) {
 
   const handleDelete = async (artifact: ArtifactSummary) => {
     if (!artifact.type) {
-      setStatus({ message: 'Artifact type is required to delete a model.', tone: 'error' })
+      setStatus({
+        message: 'Artifact type is required to delete a model.',
+        tone: 'error',
+      })
       return
     }
     const res = await deleteArtifact(artifact.type, artifact.id, token)
@@ -141,13 +195,19 @@ export function SearchTab({ token }: SearchTabProps) {
       setStatus({ message: res.error, tone: 'error' })
     } else {
       setResults((prev) => prev.filter((r) => r.id !== artifact.id))
-      setStatus({ message: `Deleted ${artifact.name || artifact.id}.`, tone: 'success' })
+      setStatus({
+        message: `Deleted ${artifact.name || artifact.id}.`,
+        tone: 'success',
+      })
     }
   }
 
   const handleDownload = async (artifact: ArtifactSummary) => {
     if (!artifact.type) {
-      setStatus({ message: 'Artifact type is required to download a model.', tone: 'error' })
+      setStatus({
+        message: 'Artifact type is required to download a model.',
+        tone: 'error',
+      })
       return
     }
     const res = await downloadArtifact(artifact.type, artifact.id, token)
@@ -162,13 +222,28 @@ export function SearchTab({ token }: SearchTabProps) {
         [artifact.id]: { ...(prev[artifact.id] ?? {}), downloadUrl: url },
       }))
       window.open(url, '_blank')
-      setStatus({ message: 'Opened download URL in a new tab.', tone: 'success' })
+      setStatus({
+        message: 'Opened download URL in a new tab.',
+        tone: 'success',
+      })
     } else {
-      setStatus({ message: 'Download URL not returned by the API.', tone: 'error' })
+      setStatus({
+        message: 'Download URL not returned by the API.',
+        tone: 'error',
+      })
     }
   }
 
   const handleLicense = async (artifact: ArtifactSummary) => {
+    const effectiveType = artifact.type || defaultType
+    if (effectiveType !== 'model') {
+      setStatus({
+        message: 'License checks are only supported for models.',
+        tone: 'error',
+      })
+      return
+    }
+
     const res = await checkLicense(artifact.id, token)
     setDetailState((prev) => ({
       ...prev,
@@ -179,7 +254,10 @@ export function SearchTab({ token }: SearchTabProps) {
 
   const handleAudits = async (artifact: ArtifactSummary) => {
     if (!artifact.type) {
-      setStatus({ message: 'Artifact type is required to fetch audits.', tone: 'error' })
+      setStatus({
+        message: 'Artifact type is required to fetch audits.',
+        tone: 'error',
+      })
       return
     }
     const res = await fetchAudits(artifact.type, artifact.id, token)
@@ -222,7 +300,7 @@ export function SearchTab({ token }: SearchTabProps) {
                 <SelectContent>
                   <SelectItem value="model">Model</SelectItem>
                   <SelectItem value="dataset">Dataset</SelectItem>
-                  <SelectItem value="codebase">Codebase</SelectItem>
+                  <SelectItem value="code">Code</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -247,7 +325,9 @@ export function SearchTab({ token }: SearchTabProps) {
 
         {results.length > 0 && (
           <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <span>Showing {Math.min(results.length, page * RESULTS_PER_PAGE)} of {results.length}</span>
+            <span>
+              Showing {Math.min(results.length, page * RESULTS_PER_PAGE)} of {results.length}
+            </span>
             <Badge variant="outline">Page {page}</Badge>
           </div>
         )}
@@ -259,15 +339,24 @@ export function SearchTab({ token }: SearchTabProps) {
                 <CardHeader className="flex flex-row items-start justify-between gap-4">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <CardTitle className="text-lg">{artifact.name || artifact.id}</CardTitle>
-                      <Badge variant="secondary">{artifact.type || defaultType}</Badge>
+                      <CardTitle className="text-lg">
+                        {artifact.name || artifact.id}
+                      </CardTitle>
+                      <Badge variant="secondary">
+                        {artifact.type || defaultType}
+                      </Badge>
                     </div>
                     <CardDescription className="text-xs font-mono text-muted-foreground">
                       id: {artifact.id}
                     </CardDescription>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" size="sm" className="gap-1" onClick={() => handleDownload(artifact)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1"
+                      onClick={() => handleDownload(artifact)}
+                    >
                       <Download className="h-4 w-4" />
                       Download
                     </Button>
@@ -320,6 +409,7 @@ export function SearchTab({ token }: SearchTabProps) {
                           state={detailState[artifact.id]}
                           onRefresh={() => loadDetails(artifact)}
                           artifact={artifact}
+                          defaultType={defaultType}
                         />
                       </AccordionContent>
                     </AccordionItem>
@@ -368,9 +458,12 @@ type DetailSectionProps = {
   state?: DetailState
   onRefresh: () => void
   artifact: ArtifactSummary
+  defaultType: string
 }
 
-function DetailSection({ state, onRefresh, artifact }: DetailSectionProps) {
+function DetailSection({ state, onRefresh, artifact, defaultType }: DetailSectionProps) {
+  const effectiveType = artifact.type || defaultType
+
   if (!state) {
     return (
       <div className="text-sm text-muted-foreground">
@@ -418,8 +511,8 @@ function DetailSection({ state, onRefresh, artifact }: DetailSectionProps) {
           </li>
           <li className="flex items-center gap-1">
             <ChevronUp className="h-3 w-3" />{' '}
-            {artifact.type
-              ? `GET /artifact/${artifact.type}/${artifact.id}/cost`
+            {effectiveType
+              ? `GET /artifact/${effectiveType}/${artifact.id}/cost`
               : 'Cost requires artifact type'}
           </li>
           <li className="flex items-center gap-1">

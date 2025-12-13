@@ -15,18 +15,14 @@ export type ArtifactSummary = {
 export type FetchResult<T> = { data?: T; error?: string }
 
 // Default to the provided API Gateway base if NEXT_PUBLIC_API_BASE is not set.
-const apiBase =
-  typeof process !== 'undefined'
-    ? (process.env.NEXT_PUBLIC_API_BASE ?? 'https://jlx4q9cg22.execute-api.us-east-1.amazonaws.com').replace(
-        /\/+$/,
-        '',
-      )
-    : ''
+const apiBase = 'https://jlx4q9cg22.execute-api.us-east-1.amazonaws.com'
+
 
 const withAuthHeaders = (token?: string, extra?: HeadersInit): HeadersInit => ({
-  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  ...(token ? { 'X-Authorization': token } : {}),
   ...extra,
 })
+
 
 const buildUrl = (path: string) => `${apiBase}${path}`
 
@@ -83,30 +79,32 @@ export const uploadArtifact = async ({
   file,
   token,
 }: UploadOptions) => {
-  const path =
-    mode === 'new'
-      ? `/artifacts/${encodeURIComponent(artifactType)}`
-      : `/artifacts/${encodeURIComponent(artifactType)}/${encodeURIComponent(artifactId)}`
+  const isNew = mode === 'new'
+  const path = isNew
+    ? `/artifact/${encodeURIComponent(artifactType)}`
+    : `/artifacts/${encodeURIComponent(artifactType)}/${encodeURIComponent(artifactId)}`
 
   if (sourceType === 'file') {
     const form = new FormData()
     if (file) form.append('file', file)
     if (artifactId) form.append('id', artifactId)
-    return httpJson(path, {
-      method: mode === 'new' ? 'POST' : 'PUT',
+      return httpJson(path, {
+      method: isNew ? 'POST' : 'PUT',
       headers: withAuthHeaders(token),
       body: form,
     })
+
   }
 
-  return httpJson(path, {
-    method: mode === 'new' ? 'POST' : 'PUT',
+    return httpJson(path, {
+    method: isNew ? 'POST' : 'PUT',
     headers: withAuthHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({
-      id: artifactId || undefined,
-      sourceUrl: sourceUrl,
+      // spec wants { "url": "..." }
+      url: sourceUrl,
     }),
   })
+
 }
 
 const normalizeArtifact = (item: any, fallbackType?: string): ArtifactSummary => {
