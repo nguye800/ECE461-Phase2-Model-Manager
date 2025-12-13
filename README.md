@@ -1,8 +1,8 @@
 # Contributors
-Daniel Brown
-Michael Ray
-Matthew Weiss
-Brian Diaz
+Mythrai Kapidi
+Lucas Nguyen 
+Shriya Gupta
+Eric Song
 
 for run test:
 
