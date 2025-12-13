@@ -15,6 +15,8 @@ def test_rate_endpoint_returns_expected_metrics():
     assert model_id, "Set MODEL_ID to an ingested model's id before running."
 
     r = requests.get(f"{API_BASE}/artifact/model/{model_id}/rate", timeout=120)
+    if r.status_code in (202, 500) and "pending initial scoring" in r.text.lower():
+        pytest.skip("Rate job is still pending initial scoring.")
     assert r.status_code == 200, r.text
 
     body = r.json()

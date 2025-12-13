@@ -109,10 +109,8 @@ class UploadHandlerTests(unittest.TestCase):
             os.environ,
             {
                 "MODEL_BUCKET_NAME": "test-bucket",
-                "MODEL_REGISTRY_CLUSTER_ARN": "arn:aws:rds:region:acct:cluster:example",
-                "MODEL_REGISTRY_SECRET_ARN": "arn:aws:secretsmanager:region:acct:secret:example",
-                "MODEL_REGISTRY_DATABASE": "model_registry",
-                "MODEL_REGISTRY_TABLE": "model_registry",
+                "ARTIFACTS_DDB_TABLE": "model-metadata",
+                "ARTIFACTS_DDB_REGION": "us-east-1",
             },
             clear=True,
         )
@@ -120,12 +118,12 @@ class UploadHandlerTests(unittest.TestCase):
 
         # Ensure cached clients do not leak across tests
         upload._S3_CLIENT = None
-        upload._RDS_CLIENT = None
+        upload._ARTIFACTS_TABLE = None
 
     def tearDown(self):
         self.env_patch.stop()
         upload._S3_CLIENT = None
-        upload._RDS_CLIENT = None
+        upload._ARTIFACTS_TABLE = None
 
     def test_handle_upload_creates_new_record(self):
         event = _sample_event()
@@ -139,10 +137,12 @@ class UploadHandlerTests(unittest.TestCase):
         ]
 
         with patch.object(upload, "_upload_artifacts", return_value=uploaded_artifacts) as mock_upload, \
-                patch.object(upload, "_record_exists", return_value=False) as mock_exists, \
-                patch.object(upload, "_insert_model_record") as mock_insert, \
-                patch.object(upload, "_update_model_record") as mock_update:
+                patch.object(upload, "_get_artifacts_table") as mock_table_factory, \
+                patch.object(upload, "_fetch_existing_item", return_value=None) as mock_fetch, \
+                patch.object(upload, "_build_ddb_item", return_value={"pk": "MODEL#model-123"}) as mock_build:
 
+            table_mock = MagicMock()
+            mock_table_factory.return_value = table_mock
             response = upload.handle_upload(event, MagicMock())
 
         self.assertEqual(response["statusCode"], 200)
@@ -157,22 +157,9 @@ class UploadHandlerTests(unittest.TestCase):
         self.assertIsInstance(request_arg, upload.UploadRequest)
         self.assertEqual(bucket_arg, "test-bucket")
 
-        mock_exists.assert_called_once_with(upload.RDSConfig(
-            cluster_arn="arn:aws:rds:region:acct:cluster:example",
-            secret_arn="arn:aws:secretsmanager:region:acct:secret:example",
-            database="model_registry",
-            table_name="model_registry",
-        ), "model-123")
-        mock_update.assert_not_called()
-        mock_insert.assert_called_once()
-
-        _, insert_kwargs = mock_insert.call_args
-        params = mock_insert.call_args.args[1] if mock_insert.call_args.args else insert_kwargs["params"]  # type: ignore[index]
-        self.assertEqual(params["repo_id"], "model-123")
-        self.assertEqual(
-            params["s3_location_of_model_zip"],
-            "s3://test-bucket/models/model-123/model.bin",
-        )
+        mock_fetch.assert_called_once()
+        mock_build.assert_called_once()
+        table_mock.put_item.assert_called_once_with(Item={"pk": "MODEL#model-123"})
 
     def test_handle_upload_updates_existing_record(self):
         event = _sample_event()
@@ -186,17 +173,20 @@ class UploadHandlerTests(unittest.TestCase):
         ]
 
         with patch.object(upload, "_upload_artifacts", return_value=uploaded_artifacts), \
-                patch.object(upload, "_record_exists", return_value=True), \
-                patch.object(upload, "_insert_model_record") as mock_insert, \
-                patch.object(upload, "_update_model_record") as mock_update:
+                patch.object(upload, "_get_artifacts_table") as mock_table_factory, \
+                patch.object(upload, "_fetch_existing_item", return_value={"pk": "MODEL#model-123"}) as mock_fetch, \
+                patch.object(upload, "_build_ddb_item", return_value={"pk": "MODEL#model-123"}) as mock_build:
 
+            table_mock = MagicMock()
+            mock_table_factory.return_value = table_mock
             response = upload.handle_upload(event, MagicMock())
 
         self.assertEqual(response["statusCode"], 200)
         body = json.loads(response["body"])
         self.assertEqual(body["action"], "updated")
-        mock_insert.assert_not_called()
-        mock_update.assert_called_once()
+        mock_fetch.assert_called_once()
+        mock_build.assert_called_once()
+        table_mock.put_item.assert_called_once()
 
     def test_handle_upload_missing_required_field(self):
         event = {
@@ -259,7 +249,8 @@ class UploadHandlerTests(unittest.TestCase):
             os.environ, {"SCORING_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123/queue"}, clear=False
         ):
             sqs_mock = MagicMock()
-            with patch.object(upload, "_get_sqs_client", return_value=sqs_mock):
+            with patch.object(upload, "_get_sqs_client", return_value=sqs_mock), \
+                    patch.object(upload, "_model_ready_for_scoring", return_value=True):
                 queued = upload._enqueue_scoring_job(request)
 
         self.assertTrue(queued)
@@ -274,7 +265,8 @@ class UploadHandlerTests(unittest.TestCase):
             os.environ, {"SCORING_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123/queue"}, clear=False
         ):
             sqs_mock = MagicMock()
-            with patch.object(upload, "_get_sqs_client", return_value=sqs_mock):
+            with patch.object(upload, "_get_sqs_client", return_value=sqs_mock), \
+                    patch.object(upload, "_model_ready_for_scoring", return_value=False):
                 queued = upload._enqueue_scoring_job(request)
 
         self.assertFalse(queued)

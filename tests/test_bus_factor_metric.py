@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -8,11 +9,74 @@ from src.metrics.bus_factor import *  # pyright: ignore[reportWildcardImportFrom
 from src.metric import ModelURLs
 
 
+class _FakeResponse:
+    def __init__(self, payload, ok=True, status_code=200):
+        self.text = json.dumps(payload)
+        self.ok = ok
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if not self.ok or self.status_code >= 400:
+            from requests import HTTPError
+
+            raise HTTPError(f"Status code {self.status_code}", response=self)
+
+
+def _build_commit_payload(commit_map: dict[str, int]) -> dict:
+    edges = []
+    for email, count in commit_map.items():
+        hist_edges = [
+            {"node": {"author": {"email": email}}}
+            for _ in range(count)
+        ]
+        edges.append({"node": {"target": {"history": {"edges": hist_edges}}}})
+    return {"data": {"repository": {"refs": {"edges": edges}}}}
+
+
 class TestBustFactor(unittest.TestCase):
     metric_instance: BusFactorMetric
 
     def setUp(self):
         self.metric_instance = BusFactorMetric()
+        os.environ["GITHUB_TOKEN"] = "dummy-token"
+        self.requests_patch = patch(
+            "src.metrics.bus_factor.requests.post", side_effect=self._fake_post
+        )
+        self.requests_patch.start()
+
+    def tearDown(self):
+        self.requests_patch.stop()
+        os.environ.pop("GITHUB_TOKEN", None)
+
+    def _fake_post(self, url, json=None, headers=None, timeout=None):
+        query = json.get("query", "") if isinstance(json, dict) else ""
+        owner = ""
+        repo = ""
+        if 'owner:"' in query and 'repository(name:"' in query:
+            try:
+                owner = query.split('owner:"')[1].split('"')[0]
+                repo = query.split('repository(name:"')[1].split('"')[0]
+            except IndexError:
+                pass
+        key = (owner, repo)
+        if key == ("silica-dev", "TerrorCTF"):
+            payload = _build_commit_payload(
+                {
+                    "silicasandwhich@github.com": 18,
+                    "marinom@rose-hulman.edu": 6,
+                    "rogerscm@rose-hulman.edu": 5,
+                    "102613108+CarsonRogers@users.noreply.github.com": 1,
+                }
+            )
+            return _FakeResponse(payload)
+        if key == ("silica-dev", "2nd_to_ft_conversion_script"):
+            payload = _build_commit_payload({"owner@example.com": 500})
+            return _FakeResponse(payload)
+        if key == ("silica-dev", "PLEASEDONTACTUALLYMAKETHIS"):
+            return _FakeResponse({"errors": [{"message": "Not Found"}]}, ok=False, status_code=404)
+        if key == ("leftwm", "leftwm"):
+            return _FakeResponse(_build_commit_payload({}))
+        return _FakeResponse(_build_commit_payload({}))
 
     # calculation testing
 

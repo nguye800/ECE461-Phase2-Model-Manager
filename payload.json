@@ -32,8 +32,7 @@
   "artifacts": [
     {
       "name": "model.zip",
-      "source_bucket": "modelzip-logs-artifacts",
-      "source_key": "seed-data/adapter-bert-base-uncased-imdb_pfeiffer-v1.zip",
+      "body": "UEsDBAoAAAAAAGCNdFvi9ri4DQAAAA0AAAAIABwAdGVtcC50eHRVVAkAA3OZH2lzmR9pdXgLAAEE9QEAAAQUAAAAZHVtbXkgcGF5bG9hZFBLAQIeAwoAAAAAAGCNdFvi9ri4DQAAAA0AAAAIABgAAAAAAAEAAACkgQAAAAB0ZW1wLnR4dFVUBQADc5kfaXV4CwABBPUBAAAEFAAAAFBLBQYAAAAAAQABAE4AAABPAAAAAAA=",
       "content_type": "application/zip"
     }
   ],

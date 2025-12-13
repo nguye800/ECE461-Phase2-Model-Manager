@@ -6,6 +6,7 @@
 
 
 import os
+import uuid
 import pytest
 import requests
 
@@ -65,3 +66,47 @@ def test_post_license_check_200_for_model():
         timeout=30,
     )
     assert r.status_code == 200, r.text
+
+
+def test_put_mismatched_id_returns_400():
+    """
+    Validate Upload Lambda rejects path/body id mismatches before mutating data.
+    """
+    mismatch_id = f"{ARTIFACT_ID}-mismatch"
+    payload = {
+        "metadata": {
+            "id": mismatch_id,
+            "name": "Integration Mismatch",
+            "type": ARTIFACT_TYPE,
+        },
+        "data": {"dummy": True},
+    }
+
+    r = requests.put(
+        f"{API_BASE}/artifacts/{ARTIFACT_TYPE}/{ARTIFACT_ID}",
+        json=payload,
+        timeout=30,
+    )
+    assert r.status_code in (400, 422), r.text
+
+
+def test_put_unknown_artifact_returns_404_or_400():
+    """
+    Using a random id should return a client error without creating new records.
+    """
+    random_id = uuid.uuid4().hex
+    payload = {
+        "metadata": {
+            "id": random_id,
+            "name": "Integration Missing",
+            "type": ARTIFACT_TYPE,
+        },
+        "data": {"dummy": True},
+    }
+
+    r = requests.put(
+        f"{API_BASE}/artifacts/{ARTIFACT_TYPE}/{random_id}",
+        json=payload,
+        timeout=30,
+    )
+    assert r.status_code in (400, 404), r.text

@@ -1,8 +1,17 @@
+import importlib.machinery
 import io
 import json
 import subprocess
+import sys
+import types
 import unittest
 from unittest.mock import MagicMock, patch
+
+# Stub boto3 before importing the module under test to avoid real AWS calls.
+boto3_module = types.ModuleType("boto3")
+boto3_module.__spec__ = importlib.machinery.ModuleSpec("boto3", loader=None)  # type: ignore[attr-defined]
+boto3_module.client = lambda *args, **kwargs: MagicMock(name=f"boto3_client_{args[0] if args else 'client'}")
+sys.modules["boto3"] = boto3_module
 
 from src.metric import ModelURLs
 from src.metrics.reproducibility import ReproducibilityMetric
